@@ -24,10 +24,14 @@ public static class SupportedLanguages
     public const string SystemDefault = "default";
     public const string EnglishUnitedStates = "en-us";
     public const string German = "de";
+    public const string French = "fr";
     public const string ChineseSimplified = "zh-hans";
+    public const string Indonesian = "id";
+    public const string Italian = "it";
+    public const string Russian = "ru";
 
     public static List<string> SupportedCultureNames { get; } =
-    [EnglishUnitedStates, German, ChineseSimplified];
+    [EnglishUnitedStates, German, French, ChineseSimplified, Indonesian, Italian, Russian];
 
     public static List<string> AllUserLanguageOptions { get; } =
     [SystemDefault, .. SupportedCultureNames];
@@ -69,6 +73,16 @@ public class UserSettings
     /// Indicates whether built-in transaction categories are disabled.
     /// </summary>
     public bool DisableBuiltInTransactionCategories { get; set; } = false;
+
+    /// <summary>
+    /// Indicates whether built-in account types are disabled.
+    /// </summary>
+    public bool DisableBuiltInAccountTypes { get; set; } = false;
+
+    /// <summary>
+    /// Indicates whether built-in asset types are disabled.
+    /// </summary>
+    public bool DisableBuiltInAssetTypes { get; set; } = false;
 
     /// <summary>
     /// Indicates whether the auto-categorizer is enabled.

@@ -1,0 +1,148 @@
+import {
+  getTransactionsByCategory,
+  getVisibleTransactions,
+} from "~/helpers/transactions";
+import { Group, Pagination, ScrollArea, Skeleton, Stack } from "@mantine/core";
+import { ITransaction } from "~/models/transaction";
+import React from "react";
+import { useTransactionCategories } from "~/providers/TransactionCategoryProvider/TransactionCategoryProvider";
+import TransactionCard from "~/components/core/Card/TransactionCard/TransactionCard";
+import { useTranslation } from "react-i18next";
+import SplitCard, {
+  BorderThickness,
+} from "~/components/ui/SplitCard/SplitCard";
+import { TagsIcon } from "lucide-react";
+import BulkActionBar from "~/components/BulkActionBar/BulkActionBar";
+import DimmedText from "~/components/core/Text/DimmedText/DimmedText";
+import PrimaryHeading from "~/components/core/Heading/PrimaryHeading/PrimaryHeading";
+import { useTransactionsQuery } from "~/hooks/queries/useTransactionsQuery";
+
+const UncategorizedTransactionsWidget = (): React.ReactNode => {
+  const itemsPerPage = 15;
+  const [activePage, setPage] = React.useState(1);
+  const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
+
+  const { t } = useTranslation();
+  const { allTransactionCategories: transactionCategories } =
+    useTransactionCategories();
+  const transactionsQuery = useTransactionsQuery();
+
+  const sortedFilteredTransactions = React.useMemo(
+    () =>
+      getVisibleTransactions(
+        getTransactionsByCategory(transactionsQuery.data ?? [], ""),
+      ).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
+    [transactionsQuery.data],
+  );
+
+  const currentPageTransactions = React.useMemo(
+    () =>
+      sortedFilteredTransactions.slice(
+        (activePage - 1) * itemsPerPage,
+        (activePage - 1) * itemsPerPage + itemsPerPage,
+      ),
+    [sortedFilteredTransactions, activePage, itemsPerPage],
+  );
+
+  const onToggleSelect = (id: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  const onClearSelection = () => setSelectedIds(new Set());
+
+  const onSelectAll = (ids: string[]) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.add(id));
+      return next;
+    });
+
+  const getWidgetContent = () => {
+    if (transactionsQuery.isPending) {
+      return <Skeleton h="100%" radius="md" />;
+    }
+
+    if (sortedFilteredTransactions.length === 0) {
+      return (
+        <Group justify="center" align="center" gap="0.5rem" h="100%">
+          <TagsIcon size={24} color="var(--base-color-text-dimmed)" />
+          <DimmedText>{t("no_uncategorized_transactions")}</DimmedText>
+        </Group>
+      );
+    }
+
+    return (
+      <ScrollArea
+        w="100%"
+        h="100%"
+        p="0.125rem"
+        type="auto"
+        offsetScrollbars="present"
+        style={{ flex: 1, minHeight: 0 }}
+      >
+        <Stack gap="0.3rem">
+          {currentPageTransactions.map((transaction: ITransaction) => (
+            <TransactionCard
+              key={transaction.id}
+              transaction={transaction}
+              categories={transactionCategories}
+              elevation={2}
+              isSelected={selectedIds.has(transaction.id)}
+              onToggleSelect={onToggleSelect}
+            />
+          ))}
+        </Stack>
+      </ScrollArea>
+    );
+  };
+
+  return (
+    <>
+      <SplitCard
+        w="100%"
+        h="100%"
+        border={BorderThickness.Thick}
+        header={
+          <Group gap="0.25rem">
+            <TagsIcon color="var(--base-color-text-dimmed)" />
+            <PrimaryHeading order={3} lh={1}>
+              {t("uncategorized_transactions")}
+            </PrimaryHeading>
+          </Group>
+        }
+        elevation={1}
+      >
+        <Stack
+          p="0.5rem"
+          gap="0.5rem"
+          align="center"
+          w="100%"
+          style={{ flex: 1, minHeight: 0 }}
+        >
+          {getWidgetContent()}
+          {sortedFilteredTransactions.length > itemsPerPage && (
+            <Pagination
+              value={activePage}
+              onChange={setPage}
+              total={Math.ceil(
+                sortedFilteredTransactions.length / itemsPerPage,
+              )}
+            />
+          )}
+        </Stack>
+      </SplitCard>
+      <BulkActionBar
+        selectedIds={selectedIds}
+        currentPageTransactions={currentPageTransactions}
+        onClearSelection={onClearSelection}
+        onSelectAll={onSelectAll}
+        categories={transactionCategories}
+      />
+    </>
+  );
+};
+
+export default UncategorizedTransactionsWidget;

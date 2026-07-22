@@ -1,3 +1,4 @@
+using BudgetBoard.Database.Models;
 using BudgetBoard.IntegrationTests.Fakers;
 using BudgetBoard.Service;
 using BudgetBoard.Service.Helpers;
@@ -248,6 +249,43 @@ public class SimpleFinAccountServiceTests()
     }
 
     [Fact]
+    public async Task DeleteAccountAsync_WhenLinkedAccountExists_ShouldResetLinkedAccountSourceToManual()
+    {
+        // Arrange
+        var helper = new TestHelper();
+        var simpleFinAccountService = new SimpleFinAccountService(
+            Mock.Of<ILogger<ISimpleFinAccountService>>(),
+            helper.UserDataContext,
+            TestHelper.CreateMockLocalizer<ResponseStrings>(),
+            TestHelper.CreateMockLocalizer<LogStrings>()
+        );
+
+        var organizationFaker = new SimpleFinOrganizationFaker(helper.demoUser.Id);
+        var organization = organizationFaker.Generate();
+
+        var linkedAccount = new AccountFaker(helper.demoUser.Id).Generate();
+        linkedAccount.Source = AccountSource.SimpleFIN;
+
+        var accountFaker = new SimpleFinAccountFaker(helper.demoUser.Id, organization.ID);
+        var account = accountFaker.Generate();
+        account.LinkedAccountId = linkedAccount.ID;
+
+        helper.UserDataContext.SimpleFinOrganizations.Add(organization);
+        helper.UserDataContext.Accounts.Add(linkedAccount);
+        helper.UserDataContext.SimpleFinAccounts.Add(account);
+        await helper.UserDataContext.SaveChangesAsync();
+
+        // Act
+        await simpleFinAccountService.DeleteSimpleFinAccountAsync(helper.demoUser.Id, account.ID);
+
+        // Assert
+        var updatedLinkedAccount = helper.UserDataContext.Accounts.First(a =>
+            a.ID == linkedAccount.ID
+        );
+        updatedLinkedAccount.Source.Should().Be(AccountSource.Manual);
+    }
+
+    [Fact]
     public async Task DeleteAccountAsync_WhenAccountNotFound_ShouldThrowException()
     {
         // Arrange
@@ -380,5 +418,110 @@ public class SimpleFinAccountServiceTests()
         await act.Should()
             .ThrowAsync<BudgetBoardServiceException>()
             .WithMessage("InvalidLinkedAccountIDError");
+    }
+
+    [Fact]
+    public async Task UpdateSimpleFinAccountSyncStartDateAsync_WhenValidData_ShouldUpdateSyncStartDate()
+    {
+        // Arrange
+        var helper = new TestHelper();
+        var simpleFinAccountService = new SimpleFinAccountService(
+            Mock.Of<ILogger<ISimpleFinAccountService>>(),
+            helper.UserDataContext,
+            TestHelper.CreateMockLocalizer<ResponseStrings>(),
+            TestHelper.CreateMockLocalizer<LogStrings>()
+        );
+
+        var organizationFaker = new SimpleFinOrganizationFaker(helper.demoUser.Id);
+        var organization = organizationFaker.Generate();
+
+        var accountFaker = new SimpleFinAccountFaker(helper.demoUser.Id, organization.ID);
+        var account = accountFaker.Generate();
+
+        helper.UserDataContext.SimpleFinOrganizations.Add(organization);
+        helper.UserDataContext.SimpleFinAccounts.Add(account);
+        await helper.UserDataContext.SaveChangesAsync();
+
+        var newSyncStartDate = DateOnly.FromDateTime(DateTime.UtcNow.AddMonths(-3));
+
+        // Act
+        await simpleFinAccountService.UpdateSimpleFinAccountSyncStartDateAsync(
+            helper.demoUser.Id,
+            account.ID,
+            newSyncStartDate
+        );
+
+        // Assert
+        var updatedAccount = helper.UserDataContext.SimpleFinAccounts.FirstOrDefault(a =>
+            a.ID == account.ID
+        );
+
+        updatedAccount.Should().NotBeNull();
+        updatedAccount!.SyncStartDate.Should().Be(newSyncStartDate);
+    }
+
+    [Fact]
+    public async Task UpdateSimpleFinAccountSyncStartDateAsync_WhenClearingSyncStartDate_ShouldSetToNull()
+    {
+        // Arrange
+        var helper = new TestHelper();
+        var simpleFinAccountService = new SimpleFinAccountService(
+            Mock.Of<ILogger<ISimpleFinAccountService>>(),
+            helper.UserDataContext,
+            TestHelper.CreateMockLocalizer<ResponseStrings>(),
+            TestHelper.CreateMockLocalizer<LogStrings>()
+        );
+
+        var organizationFaker = new SimpleFinOrganizationFaker(helper.demoUser.Id);
+        var organization = organizationFaker.Generate();
+
+        var accountFaker = new SimpleFinAccountFaker(helper.demoUser.Id, organization.ID);
+        var account = accountFaker.Generate();
+        account.SyncStartDate = DateOnly.FromDateTime(DateTime.UtcNow.AddMonths(-6));
+
+        helper.UserDataContext.SimpleFinOrganizations.Add(organization);
+        helper.UserDataContext.SimpleFinAccounts.Add(account);
+        await helper.UserDataContext.SaveChangesAsync();
+
+        // Act
+        await simpleFinAccountService.UpdateSimpleFinAccountSyncStartDateAsync(
+            helper.demoUser.Id,
+            account.ID,
+            null
+        );
+
+        // Assert
+        var updatedAccount = helper.UserDataContext.SimpleFinAccounts.FirstOrDefault(a =>
+            a.ID == account.ID
+        );
+
+        updatedAccount.Should().NotBeNull();
+        updatedAccount!.SyncStartDate.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task UpdateSimpleFinAccountSyncStartDateAsync_WhenAccountNotFound_ShouldThrowException()
+    {
+        // Arrange
+        var helper = new TestHelper();
+        var simpleFinAccountService = new SimpleFinAccountService(
+            Mock.Of<ILogger<ISimpleFinAccountService>>(),
+            helper.UserDataContext,
+            TestHelper.CreateMockLocalizer<ResponseStrings>(),
+            TestHelper.CreateMockLocalizer<LogStrings>()
+        );
+
+        // Act
+        Func<Task> act = async () =>
+            await simpleFinAccountService.UpdateSimpleFinAccountSyncStartDateAsync(
+                helper.demoUser.Id,
+                Guid.NewGuid(),
+                DateOnly.FromDateTime(DateTime.UtcNow)
+            );
+
+        // Assert
+        await act.Should()
+            .ThrowAsync<BudgetBoardServiceException>()
+            .WithMessage("SimpleFinAccountUpdateNotFoundError");
     }
 }

@@ -1,18 +1,18 @@
 import MonthToolcards from "~/components/MonthToolcards/MonthToolcards";
 import { initCurrentMonth } from "~/helpers/datetime";
-import { Button, Group, Stack } from "@mantine/core";
+import { Button, Group, Stack, ActionIcon } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import React from "react";
 import AddBudget from "./AddBudget/AddBudget";
 import { ICategory } from "~/models/category";
-import { useAuth } from "~/providers/AuthProvider/AuthProvider";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { IBudget, IBudgetCreateRequest } from "~/models/budget";
-import { AxiosError, AxiosResponse } from "axios";
+import { IBudgetCreateRequest } from "~/models/budget";
 import { notifications } from "@mantine/notifications";
-import { translateAxiosError } from "~/helpers/requests";
-import BudgetSettings from "./BudgetSettings/BudgetSettings";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router";
+import { SettingsIcon } from "lucide-react";
+import { useLocale } from "~/providers/LocaleProvider/LocaleProvider";
+import { useCreateBudgetMutation } from "~/hooks/mutations/budgets/useCreateBudgetMutation";
+import { useBudgetsQuery } from "~/hooks/queries/useBudgetsQuery";
 
 interface BudgetsToolbarProps {
   categories: ICategory[];
@@ -27,61 +27,45 @@ const BudgetsToolbar = (props: BudgetsToolbarProps): React.ReactNode => {
   const [canSelectMultiple, { toggle }] = useDisclosure(false);
 
   const { t } = useTranslation();
-  const { request } = useAuth();
+  const navigate = useNavigate();
+  const { dayjs } = useLocale();
+  const createBudgetMutation = useCreateBudgetMutation({ isCopying: true });
 
-  const queryClient = useQueryClient();
-  const doCopyBudget = useMutation({
-    mutationFn: async (newBudgets: IBudgetCreateRequest[]) =>
-      await request({
-        url: "/api/budget",
-        method: "POST",
-        data: newBudgets,
-        params: { isCopy: true },
-      }),
-    onSuccess: async (_, variables: IBudgetCreateRequest[]) =>
-      await queryClient.invalidateQueries({
-        queryKey: ["budgets", variables[0]?.date],
-      }),
-    onError: (error: AxiosError) =>
-      notifications.show({
-        message: translateAxiosError(error),
-        color: "var(--button-color-destructive)",
-      }),
+  const previousMonthDate = React.useMemo(() => {
+    if (props.selectedDates.length !== 1) {
+      return null;
+    }
+
+    const date = new Date(props.selectedDates[0]!);
+    date.setMonth(date.getMonth() - 1);
+    return date;
+  }, [props.selectedDates]);
+
+  const previousMonthBudgetsQuery = useBudgetsQuery({
+    months: previousMonthDate ? [previousMonthDate] : [],
+    enabled: props.showCopy && previousMonthDate !== null,
   });
 
   const onCopyBudgets = (): void => {
-    const lastMonth = new Date(props.selectedDates[0]!);
-    lastMonth.setMonth(lastMonth.getMonth() - 1);
+    const budgets = previousMonthBudgetsQuery.data;
 
-    request({
-      url: "/api/budget",
-      method: "GET",
-      params: { date: lastMonth },
-    })
-      .then((res: AxiosResponse<any, any>) => {
-        const budgets: IBudget[] = res.data;
-        if (budgets.length !== 0) {
-          const newBudgets: IBudgetCreateRequest[] = budgets.map((budget) => {
-            return {
-              date: props.selectedDates[0],
-              category: budget.category,
-              limit: budget.limit,
-            } as IBudgetCreateRequest;
-          });
-          doCopyBudget.mutate(newBudgets);
-        } else {
-          notifications.show({
-            message: t("budget_previous_month_no_budgets"),
-            color: "var(--button-color-destructive)",
-          });
-        }
-      })
-      .catch(() => {
-        notifications.show({
-          message: t("budget_copy_failed_message"),
-          color: "var(--button-color-destructive)",
-        });
+    if (!budgets || budgets.length === 0) {
+      notifications.show({
+        message: t("budget_previous_month_no_budgets"),
+        color: "var(--button-color-destructive)",
       });
+      return;
+    }
+
+    const newBudgets: IBudgetCreateRequest[] = budgets.map((budget) => {
+      return {
+        month: dayjs(props.selectedDates[0]!).format("YYYY-MM-DD"),
+        category: budget.category,
+        limit: budget.limit,
+      } as IBudgetCreateRequest;
+    });
+
+    createBudgetMutation.mutate(newBudgets);
   };
 
   const toggleSelectMultiple = () => {
@@ -121,7 +105,13 @@ const BudgetsToolbar = (props: BudgetsToolbarProps): React.ReactNode => {
         </Button>
         <Group gap="0.5rem">
           {props.showCopy && (
-            <Button onClick={onCopyBudgets} loading={doCopyBudget.isPending}>
+            <Button
+              onClick={onCopyBudgets}
+              loading={
+                createBudgetMutation.isPending ||
+                previousMonthBudgetsQuery.isPending
+              }
+            >
               {t("copy_previous")}
             </Button>
           )}
@@ -131,7 +121,13 @@ const BudgetsToolbar = (props: BudgetsToolbarProps): React.ReactNode => {
               categories={props.categories}
             />
           )}
-          <BudgetSettings />
+          <ActionIcon
+            variant="subtle"
+            size="input-sm"
+            onClick={() => navigate("/budgets/settings")}
+          >
+            <SettingsIcon />
+          </ActionIcon>
         </Group>
       </Group>
     </Stack>

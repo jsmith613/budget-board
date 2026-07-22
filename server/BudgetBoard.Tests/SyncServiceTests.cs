@@ -216,7 +216,11 @@ public class SyncServiceTests
         var errors = await syncService.SyncAsync(helper.demoUser.Id);
 
         // Assert
-        errors.Should().BeEquivalentTo(expectedErrors);
+        errors
+            .Should()
+            .BeEquivalentTo(
+                expectedErrors.Select(e => new SyncError { Source = "SimpleFin", Message = e })
+            );
     }
 
     [Fact]
@@ -251,7 +255,11 @@ public class SyncServiceTests
         var errors = await syncService.SyncAsync(helper.demoUser.Id);
 
         // Assert
-        errors.Should().BeEquivalentTo(expectedErrors);
+        errors
+            .Should()
+            .BeEquivalentTo(
+                expectedErrors.Select(e => new SyncError { Source = "SimpleFin", Message = e })
+            );
     }
 
     [Fact]
@@ -290,19 +298,27 @@ public class SyncServiceTests
 
         // Assert
         errors.Should().HaveCount(3);
-        errors.Should().Contain(accountErrors);
-        errors.Should().Contain(transactionErrors);
+        errors
+            .Should()
+            .Contain(
+                accountErrors.Select(e => new SyncError { Source = "SimpleFin", Message = e })
+            );
+        errors
+            .Should()
+            .Contain(
+                transactionErrors.Select(e => new SyncError { Source = "SimpleFin", Message = e })
+            );
     }
 
     [Fact]
-    public async Task SyncAsync_ShouldCallCompleteGoalsAsync()
+    public async Task SyncAsync_ShouldCallCompleteEligibleGoalsAsync()
     {
         // Arrange
         var helper = new TestHelper();
 
         var goalServiceMock = new Mock<IGoalService>();
         goalServiceMock
-            .Setup(_ => _.CompleteGoalsAsync(It.IsAny<Guid>()))
+            .Setup(_ => _.CompleteEligibleGoalsAsync(It.IsAny<Guid>()))
             .Returns(Task.CompletedTask)
             .Verifiable();
 
@@ -329,7 +345,7 @@ public class SyncServiceTests
         await syncService.SyncAsync(helper.demoUser.Id);
 
         // Assert
-        goalServiceMock.Verify(_ => _.CompleteGoalsAsync(helper.demoUser.Id), Times.Once);
+        goalServiceMock.Verify(_ => _.CompleteEligibleGoalsAsync(helper.demoUser.Id), Times.Once);
     }
 
     [Fact]
@@ -340,7 +356,7 @@ public class SyncServiceTests
 
         var automaticRuleServiceMock = new Mock<IAutomaticRuleService>();
         automaticRuleServiceMock
-            .Setup(_ => _.RunAutomaticRulesAsync(It.IsAny<Guid>()))
+            .Setup(_ => _.RunSavedAutomaticRulesAsync(It.IsAny<Guid>()))
             .Returns(Task.CompletedTask)
             .Verifiable();
 
@@ -368,7 +384,7 @@ public class SyncServiceTests
 
         // Assert
         automaticRuleServiceMock.Verify(
-            _ => _.RunAutomaticRulesAsync(helper.demoUser.Id),
+            _ => _.RunSavedAutomaticRulesAsync(helper.demoUser.Id),
             Times.Once
         );
     }
@@ -383,13 +399,13 @@ public class SyncServiceTests
 
         var goalServiceMock = new Mock<IGoalService>();
         goalServiceMock
-            .Setup(_ => _.CompleteGoalsAsync(It.IsAny<Guid>()))
+            .Setup(_ => _.CompleteEligibleGoalsAsync(It.IsAny<Guid>()))
             .Returns(Task.CompletedTask)
             .Verifiable();
 
         var automaticRuleServiceMock = new Mock<IAutomaticRuleService>();
         automaticRuleServiceMock
-            .Setup(_ => _.RunAutomaticRulesAsync(It.IsAny<Guid>()))
+            .Setup(_ => _.RunSavedAutomaticRulesAsync(It.IsAny<Guid>()))
             .Returns(Task.CompletedTask)
             .Verifiable();
 
@@ -410,9 +426,9 @@ public class SyncServiceTests
         await syncService.SyncAsync(helper.demoUser.Id);
 
         // Assert
-        goalServiceMock.Verify(_ => _.CompleteGoalsAsync(helper.demoUser.Id), Times.Once);
+        goalServiceMock.Verify(_ => _.CompleteEligibleGoalsAsync(helper.demoUser.Id), Times.Once);
         automaticRuleServiceMock.Verify(
-            _ => _.RunAutomaticRulesAsync(helper.demoUser.Id),
+            _ => _.RunSavedAutomaticRulesAsync(helper.demoUser.Id),
             Times.Once
         );
     }
@@ -677,8 +693,12 @@ public class SyncServiceTests
 
         // Assert
         errors.Should().HaveCount(2);
-        errors.Should().Contain("LunchFlow Error 1");
-        errors.Should().Contain("LunchFlow Error 2");
+        errors
+            .Should()
+            .Contain(new SyncError { Source = "LunchFlow", Message = "LunchFlow Error 1" });
+        errors
+            .Should()
+            .Contain(new SyncError { Source = "LunchFlow", Message = "LunchFlow Error 2" });
     }
 
     [Fact]
@@ -726,9 +746,15 @@ public class SyncServiceTests
 
         // Assert
         errors.Should().HaveCount(3);
-        errors.Should().Contain("Transaction Error 1");
-        errors.Should().Contain("Transaction Error 2");
-        errors.Should().Contain("Transaction Error 3");
+        errors
+            .Should()
+            .Contain(new SyncError { Source = "LunchFlow", Message = "Transaction Error 1" });
+        errors
+            .Should()
+            .Contain(new SyncError { Source = "LunchFlow", Message = "Transaction Error 2" });
+        errors
+            .Should()
+            .Contain(new SyncError { Source = "LunchFlow", Message = "Transaction Error 3" });
     }
 
     [Fact]
@@ -771,8 +797,8 @@ public class SyncServiceTests
 
         // Assert
         errors.Should().HaveCount(2);
-        errors.Should().Contain("Refresh Error");
-        errors.Should().Contain("Sync Error");
+        errors.Should().Contain(new SyncError { Source = "LunchFlow", Message = "Refresh Error" });
+        errors.Should().Contain(new SyncError { Source = "LunchFlow", Message = "Sync Error" });
     }
 
     [Fact]
@@ -876,10 +902,18 @@ public class SyncServiceTests
 
         // Assert
         errors.Should().HaveCount(4);
-        errors.Should().Contain("SimpleFin Error 1");
-        errors.Should().Contain("SimpleFin Error 2");
-        errors.Should().Contain("LunchFlow Error 1");
-        errors.Should().Contain("LunchFlow Error 2");
+        errors
+            .Should()
+            .Contain(new SyncError { Source = "SimpleFin", Message = "SimpleFin Error 1" });
+        errors
+            .Should()
+            .Contain(new SyncError { Source = "SimpleFin", Message = "SimpleFin Error 2" });
+        errors
+            .Should()
+            .Contain(new SyncError { Source = "LunchFlow", Message = "LunchFlow Error 1" });
+        errors
+            .Should()
+            .Contain(new SyncError { Source = "LunchFlow", Message = "LunchFlow Error 2" });
     }
 
     [Fact]
@@ -893,13 +927,13 @@ public class SyncServiceTests
 
         var goalServiceMock = new Mock<IGoalService>();
         goalServiceMock
-            .Setup(_ => _.CompleteGoalsAsync(It.IsAny<Guid>()))
+            .Setup(_ => _.CompleteEligibleGoalsAsync(It.IsAny<Guid>()))
             .Returns(Task.CompletedTask)
             .Verifiable();
 
         var automaticRuleServiceMock = new Mock<IAutomaticRuleService>();
         automaticRuleServiceMock
-            .Setup(_ => _.RunAutomaticRulesAsync(It.IsAny<Guid>()))
+            .Setup(_ => _.RunSavedAutomaticRulesAsync(It.IsAny<Guid>()))
             .Returns(Task.CompletedTask)
             .Verifiable();
 
@@ -920,9 +954,9 @@ public class SyncServiceTests
         await syncService.SyncAsync(helper.demoUser.Id);
 
         // Assert
-        goalServiceMock.Verify(_ => _.CompleteGoalsAsync(helper.demoUser.Id), Times.Once);
+        goalServiceMock.Verify(_ => _.CompleteEligibleGoalsAsync(helper.demoUser.Id), Times.Once);
         automaticRuleServiceMock.Verify(
-            _ => _.RunAutomaticRulesAsync(helper.demoUser.Id),
+            _ => _.RunSavedAutomaticRulesAsync(helper.demoUser.Id),
             Times.Once
         );
     }

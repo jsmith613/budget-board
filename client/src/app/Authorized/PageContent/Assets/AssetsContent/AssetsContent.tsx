@@ -1,16 +1,16 @@
-import { LoadingOverlay, Stack } from "@mantine/core";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Group, LoadingOverlay, Skeleton, Stack } from "@mantine/core";
 import React from "react";
-import { useAuth } from "~/providers/AuthProvider/AuthProvider";
 import { IAssetIndexRequest, IAssetResponse } from "~/models/asset";
 import AssetItem from "./AssetItem/AssetItem";
 import { DragDropProvider } from "@dnd-kit/react";
 import { move } from "@dnd-kit/helpers";
-import { AxiosError } from "axios";
-import { notifications } from "@mantine/notifications";
-import { translateAxiosError } from "~/helpers/requests";
 import { useDidUpdate, useDisclosure } from "@mantine/hooks";
 import AssetDetails from "./AssetDetails/AssetDetails";
+import DimmedText from "~/components/core/Text/DimmedText/DimmedText";
+import { useTranslation } from "react-i18next";
+import { InfoIcon } from "lucide-react";
+import { useAssetsQuery } from "~/hooks/queries/useAssetsQuery";
+import { useOrderAssetsMutation } from "~/hooks/mutations/assets/useOrderAssetsMutation";
 
 interface AssetsContentProps {
   isSortable: boolean;
@@ -23,40 +23,10 @@ const AssetsContent = (props: AssetsContentProps): React.ReactNode => {
     IAssetResponse | undefined
   >(undefined);
 
+  const { t } = useTranslation();
+  const assetsQuery = useAssetsQuery();
+
   const [sortedAssets, setSortedAssets] = React.useState<IAssetResponse[]>([]);
-
-  const { request } = useAuth();
-  const assetsQuery = useQuery({
-    queryKey: ["assets"],
-    queryFn: async () => {
-      const res = await request({
-        url: "/api/asset",
-        method: "GET",
-      });
-
-      if (res.status === 200) {
-        return res.data as IAssetResponse[];
-      }
-
-      return undefined;
-    },
-  });
-
-  const userSettingsQuery = useQuery({
-    queryKey: ["userSettings"],
-    queryFn: async () => {
-      const res = await request({
-        url: "/api/userSettings",
-        method: "GET",
-      });
-
-      if (res.status === 200) {
-        return res.data;
-      }
-
-      return undefined;
-    },
-  });
 
   React.useEffect(() => {
     if (assetsQuery.data) {
@@ -70,28 +40,12 @@ const AssetsContent = (props: AssetsContentProps): React.ReactNode => {
           .map((asset, index) => ({
             ...asset,
             index,
-          }))
+          })),
       );
     }
   }, [assetsQuery.data]);
 
-  const queryClient = useQueryClient();
-  const doIndexAssets = useMutation({
-    mutationFn: async (assets: IAssetIndexRequest[]) =>
-      await request({
-        url: "/api/asset/order",
-        method: "PUT",
-        data: assets,
-      }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["assets"] });
-    },
-    onError: (error: AxiosError) =>
-      notifications.show({
-        color: "var(--button-color-destructive)",
-        message: translateAxiosError(error),
-      }),
-  });
+  const orderAssetsMutation = useOrderAssetsMutation();
 
   useDidUpdate(() => {
     if (!props.isSortable) {
@@ -99,48 +53,59 @@ const AssetsContent = (props: AssetsContentProps): React.ReactNode => {
         (asset, index) => ({
           id: asset.id,
           index,
-        })
+        }),
       );
-      doIndexAssets.mutate(indexedAssets);
+      orderAssetsMutation.mutate(indexedAssets);
     }
   }, [props.isSortable]);
 
   return (
     <Stack id="assets-stack" gap="1rem">
-      <LoadingOverlay visible={doIndexAssets.isPending} />
+      <LoadingOverlay visible={orderAssetsMutation.isPending} />
       <AssetDetails
         isOpen={isDetailsOpen}
         close={closeDetails}
         asset={selectedAsset}
-        userCurrency={userSettingsQuery.data?.currency || "USD"}
       />
-      <DragDropProvider
-        onDragEnd={(event) => {
-          const updatedList = move(sortedAssets, event).map(
-            (asset, index) =>
-              ({
-                ...asset,
-                index,
-              } as IAssetResponse)
-          );
+      {assetsQuery.isPending ? (
+        <>
+          <Skeleton height={60} radius="md" />
+          <Skeleton height={60} radius="md" />
+          <Skeleton height={60} radius="md" />
+        </>
+      ) : sortedAssets.length === 0 ? (
+        <Group justify="center" align="center" gap="0.5rem">
+          <InfoIcon size={20} color="var(--base-color-text-dimmed)" />
+          <DimmedText size="sm">{t("no_assets")}</DimmedText>
+        </Group>
+      ) : (
+        <DragDropProvider
+          onDragEnd={(event) => {
+            const updatedList = move(sortedAssets, event).map(
+              (asset, index) =>
+                ({
+                  ...asset,
+                  index,
+                }) as IAssetResponse,
+            );
 
-          setSortedAssets(updatedList);
-        }}
-      >
-        {sortedAssets.map((asset) => (
-          <AssetItem
-            key={asset.id}
-            asset={asset}
-            userCurrency={userSettingsQuery.data?.currency || "USD"}
-            isSortable={props.isSortable}
-            container={document.getElementById("assets-stack") as Element}
-            openDetails={function (asset: IAssetResponse | undefined): void {
-              setSelectedAsset(asset);
-              openDetails();
-            }}
-          />
-        ))}
-      </DragDropProvider>
+            setSortedAssets(updatedList);
+          }}
+        >
+          {sortedAssets.map((asset) => (
+            <AssetItem
+              key={asset.id}
+              asset={asset}
+              isSortable={props.isSortable}
+              container={document.getElementById("assets-stack") as Element}
+              openDetails={function (asset: IAssetResponse | undefined): void {
+                setSelectedAsset(asset);
+                openDetails();
+              }}
+            />
+          ))}
+        </DragDropProvider>
+      )}
     </Stack>
   );
 };

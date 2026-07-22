@@ -1,10 +1,12 @@
-export interface IUserSettings {
+export interface IUserSettingsResponse {
   currency: string;
   language: string;
   dateFormat: string;
   budgetWarningThreshold: number;
   forceSyncLookbackMonths: number;
   disableBuiltInTransactionCategories: boolean;
+  disableBuiltInAccountTypes: boolean;
+  disableBuiltInAssetTypes: boolean;
   enableAutoCategorizer: boolean;
   autoCategorizerModelOID?: number;
   autoCategorizerLastTrained?: Date;
@@ -20,6 +22,8 @@ export interface IUserSettingsUpdateRequest {
   budgetWarningThreshold?: number;
   forceSyncLookbackMonths?: number;
   disableBuiltInTransactionCategories?: boolean;
+  disableBuiltInAccountTypes?: boolean;
+  disableBuiltInAssetTypes?: boolean;
   enableAutoCategorizer?: boolean;
   autoCategorizerModelOID?: number;
   autoCategorizerLastTrained?: Date;
@@ -35,9 +39,13 @@ export class LanguageItem {
 
 export const Languages: LanguageItem[] = [
   { value: "default", label: "system_default" },
-  { value: "en-us", label: "en_us" },
-  { value: "de", label: "de" },
-  { value: "zh-hans", label: "zh_hans" },
+  { value: "en-us", label: "english_us" },
+  { value: "de", label: "german" },
+  { value: "fr", label: "french" },
+  { value: "zh-hans", label: "chinese_simplified" },
+  { value: "id", label: "indonesian" },
+  { value: "it", label: "italian" },
+  { value: "ru", label: "russian" },
 ];
 
 export class DateFormatItem {
@@ -45,9 +53,20 @@ export class DateFormatItem {
   label: string = "";
 }
 
+export const DATE_SEPARATOR_PLACEHOLDER = "{sep}";
+
 export const DateFormats: DateFormatItem[] = [
   { value: "default", label: "system_default" },
-  { value: "MM/DD/YYYY", label: "mm_dd_yyyy" },
-  { value: "DD/MM/YYYY", label: "dd_mm_yyyy" },
-  { value: "YYYY/MM/DD", label: "yyyy_mm_dd" },
+  {
+    value: `MM${DATE_SEPARATOR_PLACEHOLDER}DD${DATE_SEPARATOR_PLACEHOLDER}YYYY`,
+    label: "mm_dd_yyyy",
+  },
+  {
+    value: `DD${DATE_SEPARATOR_PLACEHOLDER}MM${DATE_SEPARATOR_PLACEHOLDER}YYYY`,
+    label: "dd_mm_yyyy",
+  },
+  {
+    value: `YYYY${DATE_SEPARATOR_PLACEHOLDER}MM${DATE_SEPARATOR_PLACEHOLDER}DD`,
+    label: "yyyy_mm_dd",
+  },
 ];

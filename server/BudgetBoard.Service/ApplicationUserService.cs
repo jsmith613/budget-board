@@ -1,10 +1,10 @@
 ﻿using BudgetBoard.Database.Data;
 using BudgetBoard.Database.Models;
+using BudgetBoard.Service.Helpers;
 using BudgetBoard.Service.Interfaces;
 using BudgetBoard.Service.Models;
 using BudgetBoard.Service.Resources;
 using Microsoft.AspNetCore.Identity;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Localization;
 using Microsoft.Extensions.Logging;
 
@@ -17,10 +17,7 @@ public class ApplicationUserService(
     IStringLocalizer<LogStrings> logLocalizer
 ) : IApplicationUserService
 {
-    private readonly ILogger<IApplicationUserService> _logger = logger;
-    private readonly UserDataContext _userDataContext = userDataContext;
-    private readonly IStringLocalizer<ResponseStrings> _responseLocalizer = responseLocalizer;
-    private readonly IStringLocalizer<LogStrings> _logLocalizer = logLocalizer;
+    public const string OidcLoginProvider = "oidc";
 
     /// <inheritdoc />
     public async Task<IApplicationUserResponse> ReadApplicationUserAsync(
@@ -28,7 +25,7 @@ public class ApplicationUserService(
         UserManager<ApplicationUser> userManager
     )
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         var logins = await userManager.GetLoginsAsync(userData);
         var hasOidcLogin = logins.Any(l => l.LoginProvider == "oidc");
@@ -43,33 +40,115 @@ public class ApplicationUserService(
         IApplicationUserUpdateRequest request
     )
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
-        _userDataContext.Entry(userData).CurrentValues.SetValues(request);
-        await _userDataContext.SaveChangesAsync();
+        userData.LastSync = request.LastSync;
+        await userDataContext.SaveChangesAsync();
     }
 
-    private async Task<ApplicationUser> GetCurrentUserAsync(string id)
+    public async Task ConnectOidcLoginAsync(
+        Guid userGuid,
+        string providerKey,
+        UserManager<ApplicationUser> userManager
+    )
     {
-        ApplicationUser? foundUser;
-        try
+        if (string.IsNullOrWhiteSpace(providerKey))
         {
-            foundUser = await _userDataContext.ApplicationUsers.FirstOrDefaultAsync(u =>
-                u.Id == new Guid(id)
+            logger.LogError(
+                "{LogMessage}",
+                logLocalizer["AddOidcFailedLog", userGuid, "OIDC provider key is missing"]
             );
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError("{LogMessage}", _logLocalizer["UserRetrievalErrorLog", ex.Message]);
-            throw new BudgetBoardServiceException(_responseLocalizer["UserRetrievalError"]);
+            throw new BudgetBoardServiceException(responseLocalizer["AddOidcFailedError"]);
         }
 
-        if (foundUser == null)
+        var userData = await GetCurrentUserAsync(userGuid);
+
+        var logins = await userManager.GetLoginsAsync(userData);
+        var oidcLogin = logins.FirstOrDefault(l => l.LoginProvider == OidcLoginProvider);
+        if (oidcLogin != null)
         {
-            _logger.LogError("{LogMessage}", _logLocalizer["InvalidUserErrorLog"]);
-            throw new BudgetBoardServiceException(_responseLocalizer["InvalidUserError"]);
+            logger.LogWarning("{LogMessage}", logLocalizer["OidcLoginAlreadyExistsLog", userGuid]);
+            throw new BudgetBoardServiceException(responseLocalizer["OidcLoginAlreadyExistsError"]);
         }
 
-        return foundUser;
+        var result = await userManager.AddLoginAsync(
+            userData,
+            new UserLoginInfo(OidcLoginProvider, providerKey, OidcLoginProvider)
+        );
+
+        if (!result.Succeeded)
+        {
+            logger.LogError(
+                "{LogMessage}",
+                logLocalizer[
+                    "AddOidcFailedLog",
+                    userGuid,
+                    string.Join(", ", result.Errors.Select(e => e.Description))
+                ]
+            );
+            throw new BudgetBoardServiceException(responseLocalizer["AddOidcFailedError"]);
+        }
+
+        logger.LogInformation("{LogMessage}", logLocalizer["AddOidcSuccessLog", userGuid]);
+    }
+
+    /// <inheritdoc />
+    public async Task DisconnectOidcLoginAsync(
+        Guid userGuid,
+        UserManager<ApplicationUser> userManager
+    )
+    {
+        var userData = await GetCurrentUserAsync(userGuid);
+
+        var logins = await userManager.GetLoginsAsync(userData);
+        var oidcLogin = logins.FirstOrDefault(l => l.LoginProvider == OidcLoginProvider);
+        if (oidcLogin == null)
+        {
+            logger.LogWarning("{LogMessage}", logLocalizer["NoOidcLoginFoundLog", userGuid]);
+            throw new BudgetBoardServiceException(responseLocalizer["NoOidcLoginFoundError"]);
+        }
+
+        // We can't allow a user to remove OIDC login if they don't have a local account,
+        // since they would not be able to login anymore.
+        var hasPassword = await userManager.HasPasswordAsync(userData);
+        var remainingLogins = logins.Count(l => l.LoginProvider != OidcLoginProvider);
+        if (!hasPassword && remainingLogins == 0)
+        {
+            logger.LogWarning("{LogMessage}", logLocalizer["RemoveOidcNoPasswordLog", userGuid]);
+            throw new BudgetBoardServiceException(responseLocalizer["RemoveOidcNoPasswordError"]);
+        }
+
+        var result = await userManager.RemoveLoginAsync(
+            userData,
+            oidcLogin.LoginProvider,
+            oidcLogin.ProviderKey
+        );
+
+        if (!result.Succeeded)
+        {
+            logger.LogError(
+                "{LogMessage}",
+                logLocalizer[
+                    "RemoveOidcFailedLog",
+                    userGuid,
+                    string.Join(", ", result.Errors.Select(e => e.Description))
+                ]
+            );
+            throw new BudgetBoardServiceException(responseLocalizer["RemoveOidcFailedError"]);
+        }
+
+        logger.LogInformation("{LogMessage}", logLocalizer["RemoveOidcSuccessLog", userGuid]);
+    }
+
+    private async Task<ApplicationUser> GetCurrentUserAsync(Guid id)
+    {
+        return await UserDataServiceHelper.GetCurrentUserAsync(
+            userDataContext,
+            logger,
+            logLocalizer,
+            responseLocalizer,
+            id,
+            users => users
+        );
     }
 }

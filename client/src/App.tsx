@@ -11,8 +11,13 @@ import {
   CSSVariablesResolver,
   MantineProvider,
 } from "@mantine/core";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Notifications } from "@mantine/notifications";
+import {
+  QueryCache,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
+import { notifications, Notifications } from "@mantine/notifications";
+import { translateAxiosError } from "~/helpers/requests";
 
 import Welcome from "~/app/Unauthorized/Welcome";
 import OidcCallback from "~/app/Unauthorized/OidcCallback/OidcCallback";
@@ -31,12 +36,18 @@ import {
   red,
   borderEggshell,
   textEggshellDimmed,
+  purple,
 } from "./shared/colors";
 import { UserSettingsProvider } from "./providers/UserSettingsProvider/UserSettingsProvider";
-import { DateProvider } from "./providers/DateProvider/DateProvider";
+import { LocaleProvider } from "./providers/LocaleProvider/LocaleProvider";
 
 // Your theme configuration is merged with default theme
 const theme = createTheme({
+  fontFamily: "IBM Plex Sans Variable, sans-serif",
+  headings: {
+    fontFamily: "Plus Jakarta Sans Variable, sans-serif",
+    fontWeight: "600",
+  },
   cursorType: "pointer",
   defaultRadius: "xs",
   primaryColor: "indigo",
@@ -70,6 +81,7 @@ const resolver: CSSVariablesResolver = () => ({
     "--background-color-base": backgroundEggshell[0],
     "--base-color-border": backgroundEggshell[4],
     "--base-color-text-primary": textBlack[1],
+    "--base-color-text-secondary": textEggshellDimmed[8],
     "--base-color-text-dimmed": textEggshellDimmed[6],
     "--base-color-input-background": backgroundEggshell[2],
     "--base-color-input-border": backgroundEggshell[5],
@@ -78,21 +90,23 @@ const resolver: CSSVariablesResolver = () => ({
     "--background-color-sidebar": backgroundEggshell[2],
     "--background-color-header": backgroundEggshell[1],
     // Surface colors
-    "--background-color-surface": backgroundEggshell[2],
-    "--surface-color-border": borderEggshell[2],
+    "--background-color-surface": backgroundEggshell[3],
+    "--surface-color-border": borderEggshell[3],
     "--surface-color-text-primary": textBlack[1],
+    "--surface-color-text-secondary": textEggshellDimmed[8],
     "--surface-color-text-dimmed": textEggshellDimmed[6],
     "--surface-color-input-background": backgroundEggshell[5],
     "--surface-color-input-border": backgroundEggshell[8],
     "--surface-color-progress": backgroundEggshell[5],
     // Elevated colors
-    "--background-color-elevated": backgroundEggshell[4],
-    "--elevated-color-border": borderEggshell[3],
+    "--background-color-elevated": backgroundEggshell[6],
+    "--elevated-color-border": borderEggshell[4],
     "--elevated-color-text-primary": textBlack[1],
+    "--elevated-color-text-secondary": textEggshellDimmed[8],
     "--elevated-color-text-dimmed": textEggshellDimmed[7],
-    "--elevated-color-input-background": backgroundEggshell[6],
+    "--elevated-color-input-background": backgroundEggshell[7],
     "--elevated-color-input-border": backgroundEggshell[9],
-    "--elevated-color-progress": backgroundEggshell[7],
+    "--elevated-color-progress": backgroundEggshell[8],
     // Text Status colors
     "--text-color-status-good": green[9],
     "--text-color-status-neutral": blue[7],
@@ -102,14 +116,21 @@ const resolver: CSSVariablesResolver = () => ({
     "--button-color-confirm": green[9],
     "--button-color-warning": orange[6],
     "--button-color-destructive": red[5],
+    // Accent colors
+    "--accent-color-green": green[9],
+    "--accent-color-blue": blue[7],
+    "--accent-color-orange": orange[5],
+    "--accent-color-red": red[5],
+    "--accent-color-purple": purple[4],
     // Other
-    "--light-color-off": backgroundEggshell[7],
+    "--light-color-off": backgroundEggshell[8],
   },
   dark: {
     // Base colors
     "--background-color-base": backgroundGray[9],
     "--base-color-border": backgroundGray[4],
     "--base-color-text-primary": textGray[0],
+    "--base-color-text-secondary": textGray[3],
     "--base-color-text-dimmed": textGray[8],
     "--base-color-input-background": backgroundGray[7],
     "--base-color-input-border": backgroundGray[4],
@@ -121,6 +142,7 @@ const resolver: CSSVariablesResolver = () => ({
     "--background-color-surface": backgroundGray[7],
     "--surface-color-border": backgroundGray[3],
     "--surface-color-text-primary": textGray[0],
+    "--surface-color-text-secondary": textGray[3],
     "--surface-color-text-dimmed": textGray[9],
     "--surface-color-input-background": backgroundGray[5],
     "--surface-color-input-border": backgroundGray[3],
@@ -129,6 +151,7 @@ const resolver: CSSVariablesResolver = () => ({
     "--background-color-elevated": backgroundGray[5],
     "--elevated-color-border": backgroundGray[0],
     "--elevated-color-text-primary": textGray[0],
+    "--elevated-color-text-secondary": textGray[3],
     "--elevated-color-text-dimmed": textGray[9],
     "--elevated-color-input-background": backgroundGray[3],
     "--elevated-color-input-border": backgroundGray[0],
@@ -142,12 +165,33 @@ const resolver: CSSVariablesResolver = () => ({
     "--button-color-confirm": green[9],
     "--button-color-warning": orange[5],
     "--button-color-destructive": red[4],
+    // Accent colors
+    "--accent-color-green": green[8],
+    "--accent-color-blue": blue[5],
+    "--accent-color-orange": orange[7],
+    "--accent-color-red": red[4],
+    "--accent-color-purple": purple[5],
     // Other
     "--light-color-off": backgroundGray[3],
   },
 });
 
 const queryClient = new QueryClient({
+  queryCache: new QueryCache({
+    onError: (error, query) => {
+      if (
+        (query.meta as { skipGlobalErrorToast?: boolean } | undefined)
+          ?.skipGlobalErrorToast
+      ) {
+        return;
+      }
+
+      notifications.show({
+        color: "var(--button-color-destructive)",
+        message: translateAxiosError(error as any),
+      });
+    },
+  }),
   defaultOptions: {
     queries: {
       staleTime: 30000,
@@ -175,22 +219,15 @@ function App() {
                   </UnauthorizedRoute>
                 }
               />
+              <Route path="/oidc-callback" element={<OidcCallback />} />
               <Route
-                path="/oidc-callback"
-                element={
-                  <UnauthorizedRoute>
-                    <OidcCallback />
-                  </UnauthorizedRoute>
-                }
-              />
-              <Route
-                path="/dashboard"
+                path="/*"
                 element={
                   <AuthorizedRoute>
                     <UserSettingsProvider>
-                      <DateProvider>
+                      <LocaleProvider>
                         <Authorized />
-                      </DateProvider>
+                      </LocaleProvider>
                     </UserSettingsProvider>
                   </AuthorizedRoute>
                 }

@@ -1,0 +1,130 @@
+import { Button, Stack } from "@mantine/core";
+import { useField } from "@mantine/form";
+import { useDisclosure } from "@mantine/hooks";
+import { notifications } from "@mantine/notifications";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { AxiosError } from "axios";
+import React from "react";
+import { useAuth } from "~/providers/AuthProvider/AuthProvider";
+import { translateAxiosError, userSettingsQueryKey } from "~/helpers/requests";
+import Modal from "~/components/core/Modal/Modal";
+import PrimaryText from "~/components/core/Text/PrimaryText/PrimaryText";
+import DateInput from "~/components/core/Input/DateInput/DateInput";
+import { useTranslation } from "react-i18next";
+import { ITrainAutoCategorizer as ITrainAutoCategorizerRequest } from "~/models/autoCategorizer";
+import DimmedText from "~/components/core/Text/DimmedText/DimmedText";
+import { useUserSettings } from "~/providers/UserSettingsProvider/UserSettingsProvider";
+
+const TrainAutoCategorizerModal = (): React.ReactNode => {
+  const { t } = useTranslation();
+  const {
+    autoCategorizerLastTrained,
+    autoCategorizerModelStartDate,
+    autoCategorizerModelEndDate,
+  } = useUserSettings();
+
+  const [opened, { open, close }] = useDisclosure(false);
+
+  const startDateField = useField<Date | null>({
+    initialValue: null,
+  });
+  const endDateField = useField<Date | null>({
+    initialValue: null,
+  });
+
+  const { request } = useAuth();
+  const queryClient = useQueryClient();
+  const doTrainAutoCategorizer = useMutation({
+    mutationFn: async (trainAutoCategorizer: ITrainAutoCategorizerRequest) =>
+      await request({
+        url: "/api/trainAutoCategorizer",
+        method: "POST",
+        data: trainAutoCategorizer,
+      }),
+    onSuccess: async () => {
+      notifications.show({
+        message: t("train_auto_categorizer_success"),
+      });
+      close();
+      await queryClient.invalidateQueries({ queryKey: [userSettingsQueryKey] });
+    },
+    onError: (error: AxiosError) => {
+      notifications.show({
+        message: translateAxiosError(error),
+        color: "var(--button-color-destructive)",
+      });
+    },
+  });
+
+  const onSubmit = () => {
+    const startDate = startDateField.getValue();
+    const endDate = endDateField.getValue();
+    if (startDate != null && endDate != null && startDate > endDate) {
+      notifications.show({
+        color: "var(--button-color-destructive)",
+        message: t("train_auto_categorizer_dates_error"),
+      });
+      return;
+    }
+
+    doTrainAutoCategorizer.mutate({
+      startDate: startDateField.getValue(),
+      endDate: endDateField.getValue(),
+    } as ITrainAutoCategorizerRequest);
+  };
+
+  return (
+    <>
+      <PrimaryText size="sm">{t("train_auto_categorizer")}</PrimaryText>
+      <DimmedText size="xs">
+        {t("train_auto_categorizer_description")}
+      </DimmedText>
+      <DimmedText size="xs">
+        {autoCategorizerLastTrained != null
+          ? t("train_auto_categorizer_last_trained", {
+              lastTrained: autoCategorizerLastTrained,
+              trainDataStartDate: autoCategorizerModelStartDate,
+              trainDataEndDate: autoCategorizerModelEndDate,
+            })
+          : t("train_auto_categorizer_not_trained")}
+      </DimmedText>
+      <Button size="xs" onClick={open}>
+        {t("train_auto_categorizer_button")}
+      </Button>
+      <Modal
+        opened={opened}
+        onClose={close}
+        title={<PrimaryText>{t("train_auto_categorizer")}</PrimaryText>}
+      >
+        <Stack gap="0.25rem">
+          <DimmedText size="xs">
+            {t("train_auto_categorizer_date_range_description")}
+          </DimmedText>
+          <DateInput
+            label={<PrimaryText size="sm">{t("start_date")}</PrimaryText>}
+            placeholder={t("select_a_date")}
+            {...startDateField.getInputProps()}
+            elevation={0}
+            clearable
+          />
+          <DateInput
+            label={<PrimaryText size="sm">{t("end_date")}</PrimaryText>}
+            placeholder={t("select_a_date")}
+            {...endDateField.getInputProps()}
+            elevation={0}
+            clearable
+          />
+          <Button
+            mt="0.25rem"
+            onClick={onSubmit}
+            loading={doTrainAutoCategorizer.isPending}
+          >
+            {t("submit")}
+          </Button>
+        </Stack>
+      </Modal>
+    </>
+  );
+};
+
+export default TrainAutoCategorizerModal;

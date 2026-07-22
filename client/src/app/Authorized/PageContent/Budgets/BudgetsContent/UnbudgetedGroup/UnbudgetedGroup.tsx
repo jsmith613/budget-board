@@ -1,16 +1,19 @@
-import { Accordion as MantineAccordion, Group, Stack } from "@mantine/core";
+import { Group, Stack } from "@mantine/core";
 import React from "react";
 import UnbudgetedCard from "./UnbudgetedCard/UnbudgetedCard";
-import { CategoryNode, ICategory, ICategoryNode } from "~/models/category";
-import { convertNumberToCurrency } from "~/helpers/currency";
-import { useAuth } from "~/providers/AuthProvider/AuthProvider";
-import { useQuery } from "@tanstack/react-query";
-import { IUserSettings } from "~/models/userSettings";
-import { AxiosResponse } from "axios";
+import {
+  CategoryNode,
+  CategoryTypes,
+  ICategory,
+  ICategoryNode,
+} from "~/models/category";
+import { convertNumberToCurrency, SignDisplay } from "~/helpers/currency";
 import PrimaryText from "~/components/core/Text/PrimaryText/PrimaryText";
 import DimmedText from "~/components/core/Text/DimmedText/DimmedText";
 import Accordion from "~/components/core/Accordion/Accordion";
 import { useTranslation } from "react-i18next";
+import { useLocale } from "~/providers/LocaleProvider/LocaleProvider";
+import { useUserSettings } from "~/providers/UserSettingsProvider/UserSettingsProvider";
 
 interface UnbudgetedGroupProps {
   categoryTree: ICategoryNode[];
@@ -18,40 +21,32 @@ interface UnbudgetedGroupProps {
   categories: ICategory[];
   selectedDate: Date | null;
   openDetails: (category: string, month: Date | null) => void;
+  showUncategorized?: boolean;
 }
 
 const UnbudgetedGroup = (props: UnbudgetedGroupProps): React.ReactNode => {
   const { t } = useTranslation();
-  const { request } = useAuth();
-
-  const userSettingsQuery = useQuery({
-    queryKey: ["userSettings"],
-    queryFn: async (): Promise<IUserSettings | undefined> => {
-      const res: AxiosResponse = await request({
-        url: "/api/userSettings",
-        method: "GET",
-      });
-
-      if (res.status === 200) {
-        return res.data as IUserSettings;
-      }
-
-      return undefined;
-    },
-  });
+  const { intlLocale } = useLocale();
+  const { preferredCurrency } = useUserSettings();
 
   const total =
     props.categoryTree.reduce((acc, category) => {
       const categoryTotal = props.categoryToTransactionsTotalMap.get(
-        category.value.toLocaleLowerCase()
+        category.value.toLocaleLowerCase(),
       );
       return acc + (categoryTotal ? categoryTotal : 0);
-    }, 0) + (props.categoryToTransactionsTotalMap.get("") ?? 0);
+    }, 0) +
+    (props.showUncategorized
+      ? (props.categoryToTransactionsTotalMap.get("") ?? 0)
+      : 0);
 
   const getUnbudgetedCards = (): React.ReactNode[] => {
     const cards: React.ReactNode[] = [];
 
-    if (props.categoryToTransactionsTotalMap.has("")) {
+    if (
+      props.showUncategorized &&
+      props.categoryToTransactionsTotalMap.has("")
+    ) {
       cards.push(
         <UnbudgetedCard
           key="uncategorized"
@@ -59,12 +54,13 @@ const UnbudgetedGroup = (props: UnbudgetedGroupProps): React.ReactNode => {
             new CategoryNode({
               value: "",
               parent: "",
+              categoryType: CategoryTypes.Expense,
             })
           }
           categoryToTransactionsTotalMap={props.categoryToTransactionsTotalMap}
           selectedDate={props.selectedDate}
           openDetails={props.openDetails}
-        />
+        />,
       );
     }
 
@@ -76,7 +72,7 @@ const UnbudgetedGroup = (props: UnbudgetedGroupProps): React.ReactNode => {
           categoryToTransactionsTotalMap={props.categoryToTransactionsTotalMap}
           selectedDate={props.selectedDate}
           openDetails={props.openDetails}
-        />
+        />,
       );
     });
 
@@ -86,32 +82,33 @@ const UnbudgetedGroup = (props: UnbudgetedGroupProps): React.ReactNode => {
   const unbudgetedCards = getUnbudgetedCards();
 
   return (
-    <Accordion defaultValue={[]} elevation={1}>
-      <MantineAccordion.Item value="unbudgeted">
-        <MantineAccordion.Control>
-          <Group justify="space-between" align="center" w="100%" pr="1rem">
+    <Accordion p="0.5rem" elevation={1}>
+      <Accordion.Item
+        defaultOpen={false}
+        slim
+        title={
+          <Group justify="space-between" align="center" w="100%" pr="0.25rem">
             <PrimaryText size="lg">{t("unbudgeted")}</PrimaryText>
-            {userSettingsQuery.isPending ? null : (
-              <PrimaryText size="lg">
-                {convertNumberToCurrency(
-                  total,
-                  false,
-                  userSettingsQuery.data?.currency ?? "USD"
-                )}
-              </PrimaryText>
-            )}
+            <PrimaryText size="lg">
+              {convertNumberToCurrency(
+                total,
+                false,
+                preferredCurrency,
+                SignDisplay.Auto,
+                intlLocale,
+              )}
+            </PrimaryText>
           </Group>
-        </MantineAccordion.Control>
-        <MantineAccordion.Panel>
-          <Stack gap="0.5rem">
-            {unbudgetedCards.length > 0 ? (
-              unbudgetedCards
-            ) : (
-              <DimmedText size="sm">{t("no_unbudgeted_categories")}</DimmedText>
-            )}
-          </Stack>
-        </MantineAccordion.Panel>
-      </MantineAccordion.Item>
+        }
+      >
+        <Stack gap="0.5rem">
+          {unbudgetedCards.length > 0 ? (
+            unbudgetedCards
+          ) : (
+            <DimmedText size="sm">{t("no_unbudgeted_categories")}</DimmedText>
+          )}
+        </Stack>
+      </Accordion.Item>
     </Accordion>
   );
 };

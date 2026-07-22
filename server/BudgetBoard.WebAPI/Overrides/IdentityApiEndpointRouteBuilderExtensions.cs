@@ -6,7 +6,11 @@ using System.Diagnostics;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Encodings.Web;
+using BudgetBoard.Database.Models;
 using BudgetBoard.Overrides;
+using BudgetBoard.Service.Helpers;
+using BudgetBoard.Service.Interfaces;
+using BudgetBoard.Service.Models;
 using BudgetBoard.Utils;
 using BudgetBoard.WebAPI.Overrides;
 using BudgetBoard.WebAPI.Resources;
@@ -55,6 +59,9 @@ public static class IdentityApiEndpointRouteBuilderExtensions
         var localizer = endpoints.ServiceProvider.GetRequiredService<
             IStringLocalizer<ApiResponseStrings>
         >();
+        var logLocalizer = endpoints.ServiceProvider.GetRequiredService<
+            IStringLocalizer<ApiLogStrings>
+        >();
 
         // We'll figure out a unique endpoint name based on the final route pattern during endpoint generation.
         string? confirmEmailEndpointName = null;
@@ -67,7 +74,7 @@ public static class IdentityApiEndpointRouteBuilderExtensions
             // https://github.com/dotnet/aspnetcore/issues/47338
             routeGroup.MapPost(
                 "/register",
-                async Task<Results<Ok, ValidationProblem>> (
+                async Task<Results<Ok<RegisterResponse>, ValidationProblem>> (
                     [FromBody] RegisterRequest registration,
                     HttpContext context,
                     [FromServices] IServiceProvider sp
@@ -103,6 +110,73 @@ public static class IdentityApiEndpointRouteBuilderExtensions
                         return CreateValidationProblem(result);
                     }
 
+                    // New users get the default dashboard widget layout.
+                    if (user is ApplicationUser appUser)
+                    {
+                        var widgetSettingsService = sp.GetRequiredService<IWidgetSettingsService>();
+                        var logger = sp.GetRequiredService<ILoggerFactory>()
+                            .CreateLogger("IdentityApiEndpointRouteBuilderExtensions");
+
+                        try
+                        {
+                            foreach (var layout in WidgetSettingsHelpers.DefaultLayouts)
+                            {
+                                await widgetSettingsService.CreateWidgetSettingsAsync(
+                                    appUser.Id,
+                                    new WidgetSettingsCreateRequest
+                                    {
+                                        WidgetType = layout.WidgetType,
+                                        LgX = layout.LgX,
+                                        LgY = layout.LgY,
+                                        LgW = layout.LgW,
+                                        LgH = layout.LgH,
+                                        SmY = layout.SmY,
+                                        SmH = layout.SmH,
+                                    }
+                                );
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogError(
+                                ex,
+                                "{LogMessage}",
+                                logLocalizer[
+                                    "LocalRegistrationDefaultWidgetSeedingFailedLog",
+                                    appUser.Id,
+                                    ex.Message
+                                ]
+                            );
+
+                            // Best-effort rollback to avoid partially initialized accounts.
+                            var deleteResult = await userManager.DeleteAsync(user);
+                            if (!deleteResult.Succeeded)
+                            {
+                                logger.LogError(
+                                    "{LogMessage}",
+                                    logLocalizer[
+                                        "LocalRegistrationUserRollbackFailedLog",
+                                        appUser.Id,
+                                        string.Join(
+                                            ", ",
+                                            deleteResult.Errors.Select(e => e.Description)
+                                        )
+                                    ]
+                                );
+                            }
+
+                            return CreateValidationProblem(
+                                IdentityResult.Failed(
+                                    new IdentityError
+                                    {
+                                        Code = "DefaultWidgetSeedingFailed",
+                                        Description = localizer["DefaultWidgetSeedingFailedError"],
+                                    }
+                                )
+                            );
+                        }
+                    }
+
                     // Add local login provider
                     var userId = await userManager.GetUserIdAsync(user);
                     var loginInfo = new UserLoginInfo(
@@ -124,7 +198,16 @@ public static class IdentityApiEndpointRouteBuilderExtensions
                     }
 
                     await SendConfirmationEmailAsync(user, userManager, context, email);
-                    return TypedResults.Ok();
+
+                    return TypedResults.Ok(
+                        new RegisterResponse
+                        {
+                            EmailConfirmationRequired = userManager
+                                .Options
+                                .SignIn
+                                .RequireConfirmedEmail,
+                        }
+                    );
                 }
             );
         }
@@ -145,17 +228,72 @@ public static class IdentityApiEndpointRouteBuilderExtensions
                     Results<Ok<AccessTokenResponse>, Ok<string>, EmptyHttpResult, ProblemHttpResult>
                 > (
                     [FromBody] LoginRequest login,
-                    [FromQuery] bool? useCookies,
-                    [FromQuery] bool? useSessionCookies,
+                    [FromQuery] bool? rememberMe,
                     [FromServices] IServiceProvider sp
                 ) =>
                 {
                     var signInManager = sp.GetRequiredService<SignInManager<TUser>>();
                     var userManager = signInManager.UserManager;
+                    var basicEmailSender = sp.GetService<Identity.UI.Services.IEmailSender>();
 
-                    // TODO: Probably should add a Remember Me? option to login.
-                    var isPersistent = true;
+                    var isPersistent = rememberMe ?? false;
 
+                    // Check if user exists and verify password manually first
+                    // This allows us to differentiate between wrong password vs unverified email
+                    var user = await userManager.FindByEmailAsync(login.Email);
+                    if (user != null)
+                    {
+                        // Check lockout BEFORE password verification to prevent infinite attempts on locked accounts
+                        if (await userManager.IsLockedOutAsync(user))
+                        {
+                            return TypedResults.Problem(
+                                "InvalidEmailOrPasswordError",
+                                statusCode: StatusCodes.Status401Unauthorized
+                            );
+                        }
+
+                        var isPasswordCorrect = await userManager.CheckPasswordAsync(
+                            user,
+                            login.Password
+                        );
+
+                        if (!isPasswordCorrect)
+                        {
+                            // Increment failed login attempts for lockout
+                            await userManager.AccessFailedAsync(user);
+
+                            // Check if the account just became locked (send email only once)
+                            if (await userManager.IsLockedOutAsync(user))
+                            {
+                                var email = await userManager.GetEmailAsync(user);
+                                if (!string.IsNullOrEmpty(email) && basicEmailSender != null)
+                                {
+                                    var subject = localizer["AccountLockedOutEmailSubject"];
+                                    var message = localizer["AccountLockedOutEmailBody"];
+                                    // Fire and forget - send email asynchronously
+                                    _ = basicEmailSender.SendEmailAsync(email, subject, message);
+                                }
+                            }
+
+                            return TypedResults.Problem(
+                                "InvalidEmailOrPasswordError",
+                                statusCode: StatusCodes.Status401Unauthorized
+                            );
+                        }
+
+                        if (
+                            !await userManager.IsEmailConfirmedAsync(user)
+                            && userManager.Options.SignIn.RequireConfirmedEmail
+                        )
+                        {
+                            return TypedResults.Problem(
+                                "EmailNotVerifiedError",
+                                statusCode: StatusCodes.Status401Unauthorized
+                            );
+                        }
+                    }
+
+                    // Proceed with normal sign-in flow
                     var result = await signInManager.PasswordSignInAsync(
                         login.Email,
                         login.Password,
@@ -187,14 +325,15 @@ public static class IdentityApiEndpointRouteBuilderExtensions
 
                     if (!result.Succeeded)
                     {
+                        // If we get here and user doesn't exist, return generic error
                         return TypedResults.Problem(
-                            result.ToString(),
+                            "InvalidEmailOrPasswordError",
                             statusCode: StatusCodes.Status401Unauthorized
                         );
                     }
 
                     // Add local login provider for existing users who don't have it
-                    var user = await userManager.FindByEmailAsync(login.Email);
+                    // (user was already fetched earlier in this flow)
                     if (user is not null)
                     {
                         var logins = await userManager.GetLoginsAsync(user);

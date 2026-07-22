@@ -1,17 +1,16 @@
 import classes from "./TransactionCardContent.module.css";
 
-import { Badge, Flex, Text } from "@mantine/core";
+import { Badge, Flex } from "@mantine/core";
 import { ITransaction } from "~/models/transaction";
 import React from "react";
 import { ICategory } from "~/models/category";
 import { getFormattedCategoryValue } from "~/helpers/category";
-import { convertNumberToCurrency } from "~/helpers/currency";
-import { useAuth } from "~/providers/AuthProvider/AuthProvider";
-import { useQuery } from "@tanstack/react-query";
-import { IUserSettings } from "~/models/userSettings";
-import { AxiosResponse } from "axios";
+import { convertNumberToCurrency, SignDisplay } from "~/helpers/currency";
 import StatusText from "~/components/core/Text/StatusText/StatusText";
-import { useDate } from "~/providers/DateProvider/DateProvider";
+import { useLocale } from "~/providers/LocaleProvider/LocaleProvider";
+import PrimaryText from "~/components/core/Text/PrimaryText/PrimaryText";
+import DimmedText from "~/components/core/Text/DimmedText/DimmedText";
+import { useUserSettings } from "~/providers/UserSettingsProvider/UserSettingsProvider";
 
 interface TransactionCardContentProps {
   transaction: ITransaction;
@@ -22,50 +21,8 @@ interface TransactionCardContentProps {
 const TransactionCardContent = (
   props: TransactionCardContentProps,
 ): React.ReactNode => {
-  const { dayjs, longDateFormat } = useDate();
-  const { request } = useAuth();
-
-  const userSettingsQuery = useQuery({
-    queryKey: ["userSettings"],
-    queryFn: async (): Promise<IUserSettings | undefined> => {
-      const res: AxiosResponse = await request({
-        url: "/api/userSettings",
-        method: "GET",
-      });
-
-      if (res.status === 200) {
-        return res.data as IUserSettings;
-      }
-
-      return undefined;
-    },
-  });
-
-  const getPrimaryTextColor = (): string => {
-    switch (props.elevation) {
-      case 0:
-        return "var(--base-color-text-primary)";
-      case 1:
-        return "var(--surface-color-text-primary)";
-      case 2:
-        return "var(--elevated-color-text-primary)";
-      default:
-        return "var(--base-color-text-primary)";
-    }
-  };
-
-  const getDimmedTextColor = (): string => {
-    switch (props.elevation) {
-      case 0:
-        return "var(--base-color-text-dimmed)";
-      case 1:
-        return "var(--surface-color-text-dimmed)";
-      case 2:
-        return "var(--elevated-color-text-dimmed)";
-      default:
-        return "var(--base-color-text-dimmed)";
-    }
-  };
+  const { dayjs, longDateFormat, intlLocale } = useLocale();
+  const { preferredCurrency } = useUserSettings();
 
   const categoryValue =
     (props.transaction.subcategory ?? "").length > 0
@@ -74,23 +31,21 @@ const TransactionCardContent = (
 
   return (
     <Flex className={classes.content} w="100%" gap="0.5rem" align="center">
-      <Text
+      <DimmedText
         className={classes.dateText}
         flex="1 0 auto"
-        c={getDimmedTextColor()}
         size="sm"
-        fw={600}
+        elevation={props.elevation}
       >
         {dayjs(props.transaction.date).format(`${longDateFormat}`)}
-      </Text>
-      <Text
+      </DimmedText>
+      <PrimaryText
         className={classes.merchantNameText}
-        c={getPrimaryTextColor()}
         w="100%"
-        fw={600}
+        elevation={props.elevation}
       >
         {props.transaction.merchantName}
-      </Text>
+      </PrimaryText>
       <Flex
         className={classes.contentSubcontainer}
         gap="0.5rem"
@@ -104,15 +59,15 @@ const TransactionCardContent = (
           </Badge>
         </Flex>
         <Flex className={classes.amountContainer}>
-          {userSettingsQuery.isPending ? null : (
-            <StatusText amount={props.transaction.amount} size="md">
-              {convertNumberToCurrency(
-                props.transaction.amount,
-                true,
-                userSettingsQuery.data?.currency ?? "USD",
-              )}
-            </StatusText>
-          )}
+          <StatusText amount={props.transaction.amount} size="md">
+            {convertNumberToCurrency(
+              props.transaction.amount,
+              true,
+              preferredCurrency,
+              SignDisplay.Auto,
+              intlLocale,
+            )}
+          </StatusText>
         </Flex>
       </Flex>
     </Flex>

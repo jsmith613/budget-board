@@ -2,21 +2,19 @@ import { IAccountResponse } from "./account";
 
 export interface IGoalCreateRequest {
   name: string;
-  completeDate: Date | null;
+  completeDate: string | null;
   amount: number;
-  initialAmount: number | null;
+  applyExistingBalanceTowardsGoal: boolean;
   monthlyContribution: number | null;
   accountIds: string[];
 }
 
 export interface IGoalUpdateRequest {
   id: string;
-  name: string;
-  completeDate: Date | null;
-  isCompleteDateEditable: boolean;
-  amount: number;
-  monthlyContribution: number | null;
-  isMonthlyContributionEditable: boolean;
+  name?: string;
+  completeDate?: string | null;
+  amount?: number;
+  monthlyContribution?: number | null;
 }
 
 export interface IGoalResponse {

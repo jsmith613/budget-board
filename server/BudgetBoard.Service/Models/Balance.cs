@@ -6,7 +6,7 @@ namespace BudgetBoard.Service.Models;
 public interface IBalanceCreateRequest
 {
     decimal Amount { get; }
-    DateTime DateTime { get; }
+    DateOnly Date { get; }
     Guid AccountID { get; }
 }
 
@@ -14,60 +14,45 @@ public interface IBalanceCreateRequest
 public class BalanceCreateRequest() : IBalanceCreateRequest
 {
     public decimal Amount { get; set; } = 0;
-    public DateTime DateTime { get; set; } = DateTime.MinValue;
+    public DateOnly Date { get; set; } = DateOnly.MinValue;
     public Guid AccountID { get; set; } = Guid.NewGuid();
 }
 
 public interface IBalanceUpdateRequest
 {
     Guid ID { get; }
-    decimal Amount { get; }
-    DateTime DateTime { get; }
-    Guid AccountID { get; }
+    decimal? Amount { get; }
+    DateOnly? Date { get; }
 }
 
 [method: JsonConstructor]
 public class BalanceUpdateRequest() : IBalanceUpdateRequest
 {
     public Guid ID { get; set; } = Guid.NewGuid();
-    public decimal Amount { get; set; } = 0;
-    public DateTime DateTime { get; set; } = DateTime.MinValue;
-    public Guid AccountID { get; set; } = Guid.NewGuid();
+    public decimal? Amount { get; set; } = null;
+    public DateOnly? Date { get; set; } = null;
 }
 
 public interface IBalanceResponse
 {
     Guid ID { get; }
     decimal Amount { get; }
-    DateTime DateTime { get; }
-    DateTime? Deleted { get; }
+    DateOnly Date { get; }
     Guid AccountID { get; }
 }
 
 public class BalanceResponse : IBalanceResponse
 {
-    public Guid ID { get; set; }
-    public decimal Amount { get; set; }
-    public DateTime DateTime { get; set; }
-    public DateTime? Deleted { get; set; }
-    public Guid AccountID { get; set; }
-
-    [JsonConstructor]
-    public BalanceResponse()
-    {
-        ID = Guid.NewGuid();
-        Amount = 0;
-        DateTime = DateTime.MinValue;
-        Deleted = null;
-        AccountID = Guid.NewGuid();
-    }
+    public Guid ID { get; set; } = Guid.NewGuid();
+    public decimal Amount { get; set; } = 0;
+    public DateOnly Date { get; set; } = DateOnly.MinValue;
+    public Guid AccountID { get; set; } = Guid.NewGuid();
 
     public BalanceResponse(Balance balance)
     {
         ID = balance.ID;
         Amount = balance.Amount;
-        DateTime = balance.DateTime;
-        Deleted = balance.Deleted;
+        Date = balance.Date;
         AccountID = balance.AccountID;
     }
 }

@@ -1,4 +1,12 @@
-import { Anchor, Button, LoadingOverlay, Stack, Divider } from "@mantine/core";
+import {
+  Alert,
+  Button,
+  LoadingOverlay,
+  Stack,
+  Divider,
+  Group,
+} from "@mantine/core";
+import { Info } from "lucide-react";
 import { hasLength, isEmail, useField } from "@mantine/form";
 import React from "react";
 import { LoginCardState } from "../Welcome";
@@ -12,40 +20,66 @@ import TextInput from "~/components/core/Input/TextInput/TextInput";
 import PasswordInput from "~/components/core/Input/PasswordInput/PasswordInput";
 import PrimaryText from "~/components/core/Text/PrimaryText/PrimaryText";
 import { useTranslation } from "react-i18next";
+import Checkbox from "~/components/core/Checkbox/Checkbox";
+import { OidcAuthFlows } from "~/models/oidc";
 
 interface LoginProps {
   setLoginCardState: React.Dispatch<React.SetStateAction<LoginCardState>>;
   setUserEmail: React.Dispatch<React.SetStateAction<string>>;
   setUserPassword: React.Dispatch<React.SetStateAction<string>>;
+  rememberMe: boolean;
+  setRememberMe: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
 const Login = (props: LoginProps): React.ReactNode => {
   const [loading, setLoading] = React.useState(false);
 
   const { t } = useTranslation();
+  const { request, setIsUserAuthenticated, startOidcLogin, oidcLoading } =
+    useAuth();
+  const queryClient = useQueryClient();
 
   const { envVariables } = getProjectEnvVariables();
 
+  const isDemoMode = envVariables.VITE_DEMO_MODE?.toLowerCase() === "true";
+
   const emailField = useField<string>({
-    initialValue: "",
+    initialValue: isDemoMode ? "demo@example.com" : "",
     validate: isEmail(t("invalid_email_message")),
   });
 
   const passwordMinLength = 3;
   const passwordField = useField<string>({
-    initialValue: "",
+    initialValue: isDemoMode ? "demo" : "",
     validate: hasLength(
       { min: passwordMinLength },
       t("password_min_length_message", {
         minLength: passwordMinLength,
-      })
+      }),
     ),
   });
 
-  const { request, setIsUserAuthenticated, startOidcLogin, oidcLoading } =
-    useAuth();
-
-  const queryClient = useQueryClient();
+  const doResendVerificationEmail = (): void => {
+    request({
+      url: "/api/resendConfirmationEmail",
+      method: "POST",
+      data: {
+        email: emailField.getValue(),
+      },
+    })
+      .then(() => {
+        notifications.show({
+          color: "var(--button-color-confirm)",
+          message: t("verification_email_resent_message"),
+        });
+      })
+      .catch(() => {
+        notifications.show({
+          color: "var(--button-color-destructive)",
+          message: t("verification_email_resent_error_message"),
+        });
+      });
+  };
 
   const doLogin = async (): Promise<void> => {
     setLoading(true);
@@ -65,6 +99,9 @@ const Login = (props: LoginProps): React.ReactNode => {
         email: emailField.getValue(),
         password: passwordField.getValue(),
       },
+      params: {
+        rememberMe: props.rememberMe,
+      },
     })
       .then((res: AxiosResponse) => {
         if (res.data === "RequiresTwoFactor") {
@@ -79,12 +116,27 @@ const Login = (props: LoginProps): React.ReactNode => {
       .catch((error: AxiosError) => {
         // These error response values are specific to ASP.NET Identity,
         // so will do the error translation here.
-        if ((error.response?.data as any)?.detail === "NotAllowed") {
+        if ((error.response?.data as any)?.detail === "EmailNotVerifiedError") {
           notifications.show({
             color: "var(--button-color-destructive)",
-            message: t("login_account_not_verified_message"),
+            message: (
+              <Group gap="1rem" wrap="nowrap">
+                <div>{t("login_account_not_verified_message")}</div>
+                <Button
+                  size="xs"
+                  miw="fit-content"
+                  onClick={doResendVerificationEmail}
+                >
+                  {t("resend")}
+                </Button>
+              </Group>
+            ),
+            autoClose: 10000,
           });
-        } else if ((error.response?.data as any)?.detail === "Failed") {
+        } else if (
+          (error.response?.data as any)?.detail ===
+          "InvalidEmailOrPasswordError"
+        ) {
           notifications.show({
             color: "var(--button-color-destructive)",
             message: t("login_failed_message"),
@@ -139,14 +191,26 @@ const Login = (props: LoginProps): React.ReactNode => {
   };
 
   return (
-    <Stack gap="1rem" align="center">
+    <Stack gap={0} align="center" w="100%">
       <LoadingOverlay
         visible={loading}
         zIndex={1000}
         overlayProps={{ radius: "sm", blur: 2 }}
       />
+      {envVariables.VITE_DEMO_MODE?.toLowerCase() === "true" && (
+        <Alert
+          icon={<Info size={16} />}
+          color="blue"
+          title={t("demo_mode")}
+          w="100%"
+          p="1rem"
+          radius={0}
+        >
+          {t("demo_mode_login_hint")}
+        </Alert>
+      )}
       {envVariables.VITE_DISABLE_LOCAL_AUTH?.toLowerCase() !== "true" && (
-        <Stack w="100%" align="center" gap="0.75rem">
+        <Stack w="100%" align="center" gap="0.75rem" pb={"0.5rem"} p={"1rem"}>
           <TextInput
             {...emailField.getInputProps()}
             label={<PrimaryText size="sm">{t("email_address")}</PrimaryText>}
@@ -162,13 +226,16 @@ const Login = (props: LoginProps): React.ReactNode => {
           <Button variant="filled" fullWidth onClick={doLogin}>
             {t("login")}
           </Button>
-          <Anchor
-            size="sm"
-            fw={600}
-            onClick={submitPasswordReset.bind(null, emailField.getValue())}
-          >
-            {t("reset_password")}
-          </Anchor>
+          <Group justify="center" w="100%">
+            <Button
+              size="xs"
+              variant="subtle"
+              fw={600}
+              onClick={submitPasswordReset.bind(null, emailField.getValue())}
+            >
+              {t("reset_password")}
+            </Button>
+          </Group>
         </Stack>
       )}
       {envVariables.VITE_OIDC_ENABLED?.toLowerCase() === "true" &&
@@ -176,15 +243,29 @@ const Login = (props: LoginProps): React.ReactNode => {
           <Divider w="100%" label={t("or")} />
         )}
       {envVariables.VITE_OIDC_ENABLED?.toLowerCase() === "true" && (
-        <Button
-          variant="outline"
-          fullWidth
-          onClick={() => startOidcLogin && startOidcLogin()}
-          loading={oidcLoading}
-        >
-          {t("login_with_oidc")}
-        </Button>
+        <Stack w="100%" pt="0.5rem" p="1rem">
+          <Button
+            variant="outline"
+            fullWidth
+            onClick={() =>
+              startOidcLogin &&
+              startOidcLogin(props.rememberMe, OidcAuthFlows.SignIn)
+            }
+            loading={oidcLoading}
+          >
+            {t("login_with_oidc")}
+          </Button>
+        </Stack>
       )}
+      <Divider w="100%" />
+      <Stack w="100%" p="1rem">
+        <Checkbox
+          label={<PrimaryText size="sm">{t("remember_device")}</PrimaryText>}
+          checked={props.rememberMe}
+          onChange={(event) => props.setRememberMe(event.currentTarget.checked)}
+          elevation={1}
+        />
+      </Stack>
     </Stack>
   );
 };

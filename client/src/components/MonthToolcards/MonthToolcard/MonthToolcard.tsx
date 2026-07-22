@@ -3,7 +3,7 @@ import { CashFlowValue } from "~/models/budget";
 import Card from "~/components/core/Card/Card";
 import PrimaryText from "~/components/core/Text/PrimaryText/PrimaryText";
 import DimmedText from "~/components/core/Text/DimmedText/DimmedText";
-import { useDate } from "~/providers/DateProvider/DateProvider";
+import { useLocale } from "~/providers/LocaleProvider/LocaleProvider";
 
 interface MonthToolcardProps {
   date: Date;
@@ -14,7 +14,7 @@ interface MonthToolcardProps {
 }
 
 const MonthToolcard = (props: MonthToolcardProps): React.ReactNode => {
-  const { dayjs } = useDate();
+  const { dayjs } = useLocale();
 
   const getLightColor = (
     cashFlowValue: CashFlowValue,
@@ -46,7 +46,7 @@ const MonthToolcard = (props: MonthToolcardProps): React.ReactNode => {
       p="0.125rem"
       onClick={() => props.handleClick(props.date)}
       hoverEffect
-      elevation={1}
+      elevation={props.isSelected ? 2 : 1}
     >
       <Stack gap={0} style={{ userSelect: "none" }}>
         <Card

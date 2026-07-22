@@ -1,5 +1,6 @@
 using BudgetBoard.Database.Data;
 using BudgetBoard.Database.Models;
+using BudgetBoard.Service.Helpers;
 using BudgetBoard.Service.Interfaces;
 using BudgetBoard.Service.Models;
 using BudgetBoard.Service.Resources;
@@ -23,7 +24,7 @@ public class SimpleFinOrganizationService(
         ISimpleFinOrganizationCreateRequest request
     )
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         if (userData.SimpleFinOrganizations.Any(i => i.Domain == request.Domain))
         {
@@ -52,7 +53,7 @@ public class SimpleFinOrganizationService(
         IReadOnlyList<ISimpleFinOrganizationResponse>
     > ReadSimpleFinOrganizationsAsync(Guid userGuid)
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         return userData
             .SimpleFinOrganizations.Select(o => new SimpleFinOrganizationResponse(o))
@@ -65,7 +66,7 @@ public class SimpleFinOrganizationService(
         ISimpleFinOrganizationUpdateRequest request
     )
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         var organizationToUpdate = userData.SimpleFinOrganizations.SingleOrDefault(a =>
             a.ID == request.ID
@@ -90,7 +91,7 @@ public class SimpleFinOrganizationService(
     /// <inheritdoc />
     public async Task DeleteSimpleFinOrganizationAsync(Guid userGuid, Guid organizationGuid)
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         var organizationToDelete = userData.SimpleFinOrganizations.SingleOrDefault(o =>
             o.ID == organizationGuid
@@ -107,29 +108,15 @@ public class SimpleFinOrganizationService(
         await userDataContext.SaveChangesAsync();
     }
 
-    private async Task<ApplicationUser> GetCurrentUserAsync(string id)
+    private async Task<ApplicationUser> GetCurrentUserAsync(Guid id)
     {
-        ApplicationUser? foundUser;
-        try
-        {
-            foundUser = await userDataContext
-                .ApplicationUsers.Include(u => u.SimpleFinOrganizations)
-                .ThenInclude(i => i.Accounts)
-                .AsSplitQuery()
-                .FirstOrDefaultAsync(u => u.Id == new Guid(id));
-        }
-        catch (Exception ex)
-        {
-            logger.LogError("{LogMessage}", logLocalizer["UserDataRetrievalErrorLog", ex.Message]);
-            throw new BudgetBoardServiceException(responseLocalizer["UserDataRetrievalError"]);
-        }
-
-        if (foundUser == null)
-        {
-            logger.LogError("{LogMessage}", logLocalizer["InvalidUserErrorLog"]);
-            throw new BudgetBoardServiceException(responseLocalizer["InvalidUserError"]);
-        }
-
-        return foundUser;
+        return await UserDataServiceHelper.GetCurrentUserAsync(
+            userDataContext,
+            logger,
+            logLocalizer,
+            responseLocalizer,
+            id,
+            users => users.Include(u => u.SimpleFinOrganizations).ThenInclude(i => i.Accounts)
+        );
     }
 }

@@ -1,67 +1,45 @@
 import { ActionIcon, Group, LoadingOverlay } from "@mantine/core";
 import { useField } from "@mantine/form";
-import { notifications } from "@mantine/notifications";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { AxiosError } from "axios";
 import { PencilIcon } from "lucide-react";
-import { useAuth } from "~/providers/AuthProvider/AuthProvider";
-import { convertNumberToCurrency } from "~/helpers/currency";
-import { translateAxiosError } from "~/helpers/requests";
+import { convertNumberToCurrency, SignDisplay } from "~/helpers/currency";
 import { IInstitution, IInstitutionUpdateRequest } from "~/models/institution";
 import StatusText from "~/components/core/Text/StatusText/StatusText";
 import TextInput from "~/components/core/Input/TextInput/TextInput";
+import { useLocale } from "~/providers/LocaleProvider/LocaleProvider";
+import { useUpdateInstitutionMutation } from "~/hooks/mutations/institutions/useUpdateInstitutionMutation";
+import { useUserSettings } from "~/providers/UserSettingsProvider/UserSettingsProvider";
 
 interface IEditableInstitutionItemContentProps {
   institution: IInstitution;
   totalBalance: number;
-  userCurrency: string;
   toggle: () => void;
 }
 
 const EditableInstitutionItemContent = (
-  props: IEditableInstitutionItemContentProps
+  props: IEditableInstitutionItemContentProps,
 ) => {
   const institutionNameField = useField({
     initialValue: props.institution.name,
   });
 
-  const { request } = useAuth();
-
-  const queryClient = useQueryClient();
-  const doUpdateInstitution = useMutation({
-    mutationFn: async () => {
-      const editedInstitution: IInstitutionUpdateRequest = {
-        id: props.institution.id,
-        name: institutionNameField.getValue(),
-      };
-
-      return await request({
-        url: "/api/institution",
-        method: "PUT",
-        data: editedInstitution,
-      });
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["institutions"] });
-    },
-    onError: (error: AxiosError) => {
-      notifications.show({
-        color: "var(--button-color-destructive)",
-        message: translateAxiosError(error),
-      });
-      institutionNameField.setValue(props.institution.name);
-    },
-  });
+  const { intlLocale } = useLocale();
+  const { preferredCurrency } = useUserSettings();
+  const updateInstitutionMutation = useUpdateInstitutionMutation();
 
   return (
     <Group justify="space-between" align="center" gap="0.5rem">
-      <LoadingOverlay visible={doUpdateInstitution.isPending} />
+      <LoadingOverlay visible={updateInstitutionMutation.isPending} />
       <Group wrap="nowrap" gap="0.5rem">
         <TextInput
           w={250}
           maw="100%"
           {...institutionNameField.getInputProps()}
-          onBlur={() => doUpdateInstitution.mutate()}
+          onBlur={() =>
+            updateInstitutionMutation.mutate({
+              id: props.institution.id,
+              name: institutionNameField.getValue(),
+            } as IInstitutionUpdateRequest)
+          }
           elevation={1}
         />
         <ActionIcon
@@ -76,7 +54,13 @@ const EditableInstitutionItemContent = (
         </ActionIcon>
       </Group>
       <StatusText amount={props.totalBalance} size="md">
-        {convertNumberToCurrency(props.totalBalance, true, props.userCurrency)}
+        {convertNumberToCurrency(
+          props.totalBalance,
+          true,
+          preferredCurrency,
+          SignDisplay.Auto,
+          intlLocale,
+        )}
       </StatusText>
     </Group>
   );

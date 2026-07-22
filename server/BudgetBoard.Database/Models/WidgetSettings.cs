@@ -16,9 +16,34 @@ public class WidgetSettings
     public required string WidgetType { get; set; }
 
     /// <summary>
-    /// Indicates whether the widget is visible on the dashboard.
+    /// Column position on the grid for large screens (0-based).
     /// </summary>
-    public bool IsVisible { get; set; } = true;
+    public int LgX { get; set; } = 0;
+
+    /// <summary>
+    /// Row position on the grid for large screens (0-based).
+    /// </summary>
+    public int LgY { get; set; } = 0;
+
+    /// <summary>
+    /// Width in grid columns for large screens.
+    /// </summary>
+    public int LgW { get; set; } = 4;
+
+    /// <summary>
+    /// Height in grid row units for large screens.
+    /// </summary>
+    public int LgH { get; set; } = 5;
+
+    /// <summary>
+    /// Row position on the grid for small screens (0-based).
+    /// </summary>
+    public int SmY { get; set; } = 0;
+
+    /// <summary>
+    /// Height in grid row units for small screens.
+    /// </summary>
+    public int SmH { get; set; } = 5;
 
     /// <summary>
     /// JSON string containing widget-specific configuration options.

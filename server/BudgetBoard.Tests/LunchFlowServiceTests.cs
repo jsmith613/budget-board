@@ -273,7 +273,13 @@ public class LunchFlowServiceTests
         // Assert
         helper.UserDataContext.Users.Single().LunchFlowApiKey.Should().BeEmpty();
         accountServiceMock.Verify(
-            _ => _.UpdateAccountSourceAsync(helper.demoUser.Id, account.ID, AccountSource.Manual),
+            _ =>
+                _.UpdateAccountAsync(
+                    helper.demoUser.Id,
+                    It.Is<IAccountUpdateRequest>(req =>
+                        req.ID == account.ID && req.Source.Value == AccountSource.Manual
+                    )
+                ),
             Times.Once
         );
         lunchFlowAccountServiceMock.Verify(
@@ -988,9 +994,9 @@ public class LunchFlowServiceTests
             SyncID = "txn123",
             AccountID = account.ID,
             Amount = -50.25m,
-            Date = DateTime.Parse("2024-01-15"),
+            Date = DateOnly.Parse("2024-01-15"),
             MerchantName = "Test Store",
-            Source = TransactionSource.LunchFlow.Value,
+            Source = TransactionSource.LunchFlow,
         };
         helper.UserDataContext.Transactions.Add(existingTransaction);
 
@@ -1189,5 +1195,161 @@ public class LunchFlowServiceTests
 
         // Assert
         errors.Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public async Task SyncTransactionHistoryAsync_WhenOneAccountThrowsDuringSync_ShouldSyncRemainingAccounts()
+    {
+        // Arrange
+        var helper = new TestHelper();
+        helper.demoUser.LunchFlowApiKey = "valid-api-key";
+
+        var lunchFlowAccountFaker = new LunchFlowAccountFaker(helper.demoUser.Id);
+
+        var accountBad = new Account
+        {
+            Name = "Bad Account",
+            Type = "checking",
+            InstitutionID = Guid.NewGuid(),
+            UserID = helper.demoUser.Id,
+        };
+        helper.UserDataContext.Accounts.Add(accountBad);
+
+        var lunchFlowAccountBad = lunchFlowAccountFaker.Generate();
+        lunchFlowAccountBad.LinkedAccountId = accountBad.ID;
+        lunchFlowAccountBad.SyncID = "bad-account-id";
+        helper.UserDataContext.LunchFlowAccounts.Add(lunchFlowAccountBad);
+
+        var accountValid = new Account
+        {
+            Name = "Valid Account",
+            Type = "checking",
+            InstitutionID = Guid.NewGuid(),
+            UserID = helper.demoUser.Id,
+        };
+        helper.UserDataContext.Accounts.Add(accountValid);
+
+        var lunchFlowAccountValid = lunchFlowAccountFaker.Generate();
+        lunchFlowAccountValid.LinkedAccountId = accountValid.ID;
+        lunchFlowAccountValid.SyncID = "valid-account-id";
+        helper.UserDataContext.LunchFlowAccounts.Add(lunchFlowAccountValid);
+
+        await helper.UserDataContext.SaveChangesAsync();
+
+        var badTransactionsResponse =
+            @"{
+                ""transactions"": [
+                    {
+                        ""id"": ""txn-bad"",
+                        ""account_id"": ""bad-account-id"",
+                        ""amount"": -20.00,
+                        ""currency"": ""USD"",
+                        ""date"": ""not-a-date"",
+                        ""merchant"": ""Broken Bank"",
+                        ""description"": ""Bad"",
+                        ""is_pending"": false
+                    }
+                ],
+                ""total"": 1
+            }";
+
+        var validTransactionsResponse =
+            @"{
+                ""transactions"": [
+                    {
+                        ""id"": ""txn-valid"",
+                        ""account_id"": ""valid-account-id"",
+                        ""amount"": -50.00,
+                        ""currency"": ""USD"",
+                        ""date"": ""2024-01-15"",
+                        ""merchant"": ""Good Store"",
+                        ""description"": ""Purchase"",
+                        ""is_pending"": false
+                    }
+                ],
+                ""total"": 1
+            }";
+
+        var balanceResponse =
+            @"{
+                ""balance"": {
+                    ""amount"": 1000.00,
+                    ""currency"": ""USD""
+                }
+            }";
+
+        var mockHttpMessageHandler = new Mock<HttpMessageHandler>();
+        mockHttpMessageHandler
+            .Protected()
+            .Setup<Task<HttpResponseMessage>>(
+                "SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>()
+            )
+            .ReturnsAsync(
+                (HttpRequestMessage request, CancellationToken token) =>
+                {
+                    var url = request.RequestUri!.ToString();
+                    if (url.Contains("/transactions"))
+                    {
+                        var body = url.Contains("bad-account-id")
+                            ? badTransactionsResponse
+                            : validTransactionsResponse;
+                        return new HttpResponseMessage
+                        {
+                            StatusCode = System.Net.HttpStatusCode.OK,
+                            Content = new StringContent(body),
+                        };
+                    }
+                    return new HttpResponseMessage
+                    {
+                        StatusCode = System.Net.HttpStatusCode.OK,
+                        Content = new StringContent(balanceResponse),
+                    };
+                }
+            );
+
+        using var httpClient = new HttpClient(mockHttpMessageHandler.Object);
+        var httpClientFactoryMock = new Mock<IHttpClientFactory>();
+        httpClientFactoryMock
+            .Setup(_ => _.CreateClient(string.Empty))
+            .Returns(httpClient)
+            .Verifiable();
+
+        var nowProviderMock = Mock.Of<INowProvider>();
+        Mock.Get(nowProviderMock).Setup(_ => _.UtcNow).Returns(DateTime.UtcNow);
+        Mock.Get(nowProviderMock).Setup(_ => _.Now).Returns(DateTime.Now);
+
+        var transactionServiceMock = new Mock<ITransactionService>();
+
+        var lunchFlowService = new LunchFlowService(
+            httpClientFactoryMock.Object,
+            helper.UserDataContext,
+            Mock.Of<ILogger<ILunchFlowService>>(),
+            nowProviderMock,
+            Mock.Of<IAccountService>(),
+            transactionServiceMock.Object,
+            Mock.Of<IBalanceService>(),
+            Mock.Of<ILunchFlowAccountService>(),
+            TestHelper.CreateMockLocalizer<ResponseStrings>(),
+            TestHelper.CreateMockLocalizer<LogStrings>()
+        );
+
+        // Act
+        var errors = await lunchFlowService.SyncTransactionHistoryAsync(helper.demoUser.Id);
+
+        // Assert: the valid account's transaction was still created
+        transactionServiceMock.Verify(
+            _ =>
+                _.CreateTransactionAsync(
+                    helper.demoUser.Id,
+                    It.Is<ITransactionCreateRequest>(r => r.SyncID == "txn-valid")
+                ),
+            Times.Once
+        );
+
+        // Assert: an error was reported for the bad account
+        errors.Should().NotBeEmpty();
+        errors.Should().Contain(e => e.Contains("LunchFlowAccountSyncException"));
     }
 }

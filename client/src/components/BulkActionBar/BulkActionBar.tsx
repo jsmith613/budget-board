@@ -1,0 +1,432 @@
+import {
+  Button,
+  Collapse,
+  Flex,
+  Group,
+  Portal,
+  Stack,
+  ActionIcon,
+  Transition,
+  Badge,
+} from "@mantine/core";
+import { notifications } from "@mantine/notifications";
+import { TrashIcon } from "lucide-react";
+import React from "react";
+import { useTranslation } from "react-i18next";
+import CategorySelect from "~/components/core/Select/CategorySelect/CategorySelect";
+import TextInput from "~/components/core/Input/TextInput/TextInput";
+import NumberInput from "~/components/core/Input/NumberInput/NumberInput";
+import DateInput from "~/components/core/Input/DateInput/DateInput";
+import { getIsParentCategory, getParentCategory } from "~/helpers/category";
+import { getCurrencySymbol } from "~/helpers/currency";
+import { ICategory } from "~/models/category";
+import { ITransaction, ITransactionUpdateRequest } from "~/models/transaction";
+import SplitTransaction from "~/components/core/Card/TransactionCard/TransactionCardBase/EditableTransactionCardContent/SplitTransaction/SplitTransaction";
+import { useLocale } from "~/providers/LocaleProvider/LocaleProvider";
+import useIsMobile from "~/hooks/useIsMobile";
+import DimmedText from "../core/Text/DimmedText/DimmedText";
+import PrimaryText from "../core/Text/PrimaryText/PrimaryText";
+import { useAccountsQuery } from "~/hooks/queries/useAccountsQuery";
+import { useTransactionsQuery } from "~/hooks/queries/useTransactionsQuery";
+import { useUpdateTransactionsMutation } from "~/hooks/mutations/transactions/useUpdateTransactionsMutation";
+import { useDeleteTransactionsMutation } from "~/hooks/mutations/transactions/useDeleteTransactionsMutation";
+import { useUserSettings } from "~/providers/UserSettingsProvider/UserSettingsProvider";
+
+interface BulkActionBarProps {
+  selectedIds: Set<string>;
+  currentPageTransactions: ITransaction[];
+  onClearSelection: () => void;
+  onSelectAll: (ids: string[]) => void;
+  categories: ICategory[];
+  zIndex?: number | string;
+}
+
+const FIELDS = {
+  date: "date",
+  merchant: "merchant",
+  category: "category",
+  amount: "amount",
+} as const;
+
+const BulkActionBar = (props: BulkActionBarProps): React.ReactNode => {
+  const { t } = useTranslation();
+  const {
+    dayjsLocale,
+    dayjs,
+    longDateFormat,
+    thousandsSeparator,
+    decimalSeparator,
+  } = useLocale();
+  const { preferredCurrency } = useUserSettings();
+  const isMobile = useIsMobile();
+  const accountsQuery = useAccountsQuery();
+  const updateTransactionsMutation = useUpdateTransactionsMutation();
+  const deleteTransactionsMutation = useDeleteTransactionsMutation();
+  const transactionsQuery = useTransactionsQuery();
+
+  // Hold the bar element in state so the effect re-runs as soon as Mantine's
+  // Transition renders it (which happens in a child render cycle, not the same
+  // commit as selectedIds changing).
+  const [barElement, setBarElement] = React.useState<HTMLDivElement | null>(
+    null,
+  );
+  const barRefCallback = React.useCallback(
+    (node: HTMLDivElement | null) => setBarElement(node),
+    [],
+  );
+
+  React.useEffect(() => {
+    if (props.selectedIds.size === 0 || !barElement) {
+      document.documentElement.style.setProperty("--bulk-bar-height", "0px");
+      return;
+    }
+
+    // offsetHeight reads synchronously and includes padding — no async ResizeObserver
+    // delay on first mount.
+    const update = () =>
+      document.documentElement.style.setProperty(
+        "--bulk-bar-height",
+        `${barElement.offsetHeight}px`,
+      );
+
+    update();
+
+    // Keep updating when content changes (e.g. Collapse opens edit fields)
+    const observer = new ResizeObserver(update);
+    observer.observe(barElement);
+    return () => observer.disconnect();
+  }, [props.selectedIds.size, barElement]);
+
+  React.useEffect(() => {
+    return () => {
+      document.documentElement.style.setProperty("--bulk-bar-height", "0px");
+    };
+  }, []);
+
+  const [merchantValue, setMerchantValue] = React.useState("");
+  const [categoryValue, setCategoryValue] = React.useState("");
+  const [dateValue, setDateValue] = React.useState<Date | null>(null);
+  const [amountValue, setAmountValue] = React.useState<number | string>("");
+  const [touched, setTouched] = React.useState<Set<string>>(new Set());
+  const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false);
+
+  const touch = (field: string) =>
+    setTouched((prev) => new Set(prev).add(field));
+
+  const resetFields = () => {
+    setMerchantValue("");
+    setCategoryValue("");
+    setDateValue(null);
+    setAmountValue("");
+    setTouched(new Set());
+    setShowDeleteConfirm(false);
+  };
+
+  const selectedTransactions = (transactionsQuery.data ?? []).filter((t) =>
+    props.selectedIds.has(t.id),
+  );
+  const singleSelected =
+    selectedTransactions.length === 1 ? selectedTransactions[0] : null;
+
+  const singleSelectedAccount = React.useMemo(() => {
+    if (!singleSelected) return null;
+    return (
+      accountsQuery.data?.find((a) => a.id === singleSelected.accountID) ?? null
+    );
+  }, [singleSelected?.accountID, accountsQuery.data]);
+
+  // When a single transaction is selected, pre-populate all fields with its data
+  React.useEffect(() => {
+    if (singleSelected) {
+      const categoryVal =
+        (singleSelected.subcategory ?? "").length > 0
+          ? (singleSelected.subcategory ?? "")
+          : (singleSelected.category ?? "");
+      setDateValue(dayjs(singleSelected.date).toDate());
+      setMerchantValue(singleSelected.merchantName ?? "");
+      setCategoryValue(categoryVal);
+      setAmountValue(singleSelected.amount);
+      setTouched(new Set(Object.values(FIELDS)));
+    } else {
+      resetFields();
+    }
+  }, [singleSelected?.id]);
+
+  const handleApply = () => {
+    const requests: ITransactionUpdateRequest[] = selectedTransactions.map(
+      (t) => ({
+        id: t.id,
+        amount: touched.has(FIELDS.amount) ? (amountValue as number) : t.amount,
+        date: touched.has(FIELDS.date)
+          ? dayjs(dateValue!).format("YYYY-MM-DD")
+          : t.date,
+        merchantName: touched.has(FIELDS.merchant)
+          ? merchantValue
+          : t.merchantName,
+        category: touched.has(FIELDS.category)
+          ? getParentCategory(categoryValue, props.categories)
+          : t.category,
+        subcategory: touched.has(FIELDS.category)
+          ? getIsParentCategory(categoryValue, props.categories)
+            ? ""
+            : categoryValue
+          : t.subcategory,
+      }),
+    );
+    updateTransactionsMutation.mutate(requests, {
+      onSuccess: () => {
+        props.onClearSelection();
+        resetFields();
+      },
+    });
+  };
+
+  const handleDeleteClick = () => {
+    if (props.selectedIds.size > 1) {
+      setShowDeleteConfirm(true);
+    } else {
+      deleteTransactionsMutation.mutate(Array.from(props.selectedIds), {
+        onSuccess: () => {
+          props.onClearSelection();
+          resetFields();
+        },
+      });
+    }
+  };
+
+  const handleDateChange = (val: string | null) => {
+    if (!val) {
+      setDateValue(null);
+      setTouched((prev) => {
+        const next = new Set(prev);
+        next.delete(FIELDS.date);
+        return next;
+      });
+      return;
+    }
+    const parsed = dayjs(val);
+    if (!parsed.isValid()) {
+      notifications.show({
+        color: "var(--button-color-destructive)",
+        message: t("invalid_date"),
+      });
+      return;
+    }
+    setDateValue(parsed.toDate());
+    touch(FIELDS.date);
+  };
+
+  const isAmountInvalid =
+    touched.has(FIELDS.amount) && typeof amountValue !== "number";
+  const isApplyDisabled =
+    touched.size === 0 || props.selectedIds.size === 0 || isAmountInvalid;
+
+  return (
+    <Portal>
+      <Transition
+        mounted={props.selectedIds.size > 0}
+        transition="slide-up"
+        duration={200}
+        timingFunction="ease"
+      >
+        {(transitionStyles) => (
+          <Stack
+            ref={barRefCallback}
+            gap="0.5rem"
+            p="0.75rem"
+            style={{
+              ...transitionStyles,
+              position: "fixed",
+              bottom: 0,
+              left: isMobile ? 0 : "var(--app-shell-navbar-width, 60px)",
+              right: 0,
+              zIndex: props.zIndex ?? 200,
+              backgroundColor: "var(--background-color-surface)",
+              borderTop: "2px solid var(--surface-color-border)",
+              boxShadow: "0 -4px 12px rgba(0, 0, 0, 0.1)",
+            }}
+          >
+            {/* Selection controls row */}
+            <Group gap="0.5rem" wrap="wrap">
+              <DimmedText size="sm">
+                {t("n_selected", { count: props.selectedIds.size })}
+              </DimmedText>
+              <Button
+                size="compact-xs"
+                variant="subtle"
+                onClick={() =>
+                  props.onSelectAll(
+                    props.currentPageTransactions.map((t) => t.id),
+                  )
+                }
+              >
+                {t("select_all")} ({props.currentPageTransactions.length})
+              </Button>
+              <Button
+                size="compact-xs"
+                variant="subtle"
+                onClick={() => {
+                  props.onClearSelection();
+                  resetFields();
+                }}
+              >
+                {t("clear_selection")}
+              </Button>
+              {singleSelectedAccount && (
+                <Badge size="sm" variant="outline">
+                  {singleSelectedAccount.name}
+                </Badge>
+              )}
+            </Group>
+
+            {/* Fields + actions row */}
+            <Flex gap="0.5rem" wrap="wrap" align="flex-end">
+              <DateInput
+                label={<PrimaryText size="xs">{t("date")}</PrimaryText>}
+                value={dateValue}
+                valueFormat={longDateFormat}
+                locale={dayjsLocale}
+                onChange={handleDateChange}
+                clearable
+                w={190}
+                elevation={1}
+              />
+              <TextInput
+                label={
+                  <PrimaryText size="xs">{t("merchant_name")}</PrimaryText>
+                }
+                value={merchantValue}
+                onChange={(e) => {
+                  setMerchantValue(e.currentTarget.value);
+                  touch(FIELDS.merchant);
+                }}
+                placeholder={t("enter_merchant_name")}
+                miw={180}
+                style={{ flex: "1 1 180px" }}
+                elevation={1}
+              />
+              <CategorySelect
+                label={<PrimaryText size="xs">{t("category")}</PrimaryText>}
+                categories={props.categories}
+                value={categoryValue || null}
+                onChange={(val) => {
+                  setCategoryValue(val);
+                  touch(FIELDS.category);
+                }}
+                withinPortal
+                w={220}
+                elevation={1}
+              />
+              <NumberInput
+                label={<PrimaryText size="xs">{t("amount")}</PrimaryText>}
+                value={amountValue}
+                onChange={(val) => {
+                  setAmountValue(val);
+                  if (typeof val === "number") {
+                    touch(FIELDS.amount);
+                  } else {
+                    setTouched((prev) => {
+                      const next = new Set(prev);
+                      next.delete(FIELDS.amount);
+                      return next;
+                    });
+                  }
+                }}
+                prefix={getCurrencySymbol(preferredCurrency)}
+                thousandSeparator={thousandsSeparator}
+                decimalSeparator={decimalSeparator}
+                decimalScale={2}
+                fixedDecimalScale
+                w={140}
+                elevation={1}
+              />
+
+              <Group
+                gap="0.5rem"
+                align="flex-end"
+                style={{ marginLeft: "auto" }}
+              >
+                {singleSelected && (
+                  <SplitTransaction
+                    id={singleSelected.id}
+                    originalAmount={singleSelected.amount}
+                    categories={props.categories}
+                    elevation={1}
+                  />
+                )}
+                <ActionIcon
+                  color="var(--button-color-destructive)"
+                  onClick={handleDeleteClick}
+                  loading={deleteTransactionsMutation.isPending}
+                  title={t("delete_transactions")}
+                >
+                  <TrashIcon size="1rem" />
+                </ActionIcon>
+                <Button
+                  size="compact-sm"
+                  variant="subtle"
+                  onClick={() => {
+                    props.onClearSelection();
+                    resetFields();
+                  }}
+                >
+                  {t("cancel")}
+                </Button>
+                <Button
+                  size="compact-sm"
+                  disabled={isApplyDisabled}
+                  loading={updateTransactionsMutation.isPending}
+                  onClick={handleApply}
+                >
+                  {t("apply_changes")}
+                </Button>
+              </Group>
+            </Flex>
+
+            {/* Inline delete confirmation */}
+            <Collapse expanded={showDeleteConfirm}>
+              <Group gap="0.5rem" align="center">
+                <PrimaryText size="sm">
+                  {t("confirm_delete_transactions_message", {
+                    count: props.selectedIds.size,
+                  })}
+                </PrimaryText>
+                <Button
+                  size="compact-sm"
+                  color="var(--button-color-destructive)"
+                  loading={
+                    updateTransactionsMutation.isPending ||
+                    deleteTransactionsMutation.isPending
+                  }
+                  onClick={() => {
+                    deleteTransactionsMutation.mutate(
+                      Array.from(props.selectedIds),
+                      {
+                        onSuccess: () => {
+                          props.onClearSelection();
+                          resetFields();
+                        },
+                      },
+                    );
+                    setShowDeleteConfirm(false);
+                  }}
+                >
+                  {t("delete")}
+                </Button>
+                <Button
+                  size="compact-sm"
+                  variant="subtle"
+                  onClick={() => setShowDeleteConfirm(false)}
+                >
+                  {t("cancel")}
+                </Button>
+              </Group>
+            </Collapse>
+          </Stack>
+        )}
+      </Transition>
+    </Portal>
+  );
+};
+
+export default BulkActionBar;

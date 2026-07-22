@@ -2,24 +2,26 @@ import { ActionIcon, Button, Stack } from "@mantine/core";
 import { isNotEmpty, useField } from "@mantine/form";
 import { useDisclosure } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
-import { useQueryClient, useMutation, useQuery } from "@tanstack/react-query";
-import { AxiosError, AxiosResponse } from "axios";
 import { PlusIcon } from "lucide-react";
-import { useAuth } from "~/providers/AuthProvider/AuthProvider";
-import { translateAxiosError } from "~/helpers/requests";
 import { areStringsEqual } from "~/helpers/utils";
 import { AccountSource, IAccountCreateRequest } from "~/models/account";
-import { IInstitution, IInstitutionCreateRequest } from "~/models/institution";
 import Modal from "~/components/core/Modal/Modal";
 import PrimaryText from "~/components/core/Text/PrimaryText/PrimaryText";
 import { useTranslation } from "react-i18next";
 import TextInput from "~/components/core/Input/TextInput/TextInput";
 import Autocomplete from "~/components/core/Autocomplete/Autocomplete";
+import PrimaryHeading from "~/components/core/Heading/PrimaryHeading/PrimaryHeading";
+import { useCreateAccountMutation } from "~/hooks/mutations/accounts/useCreateAccountMutation";
+import { useInstitutionsQuery } from "~/hooks/queries/useInstitutionsQuery";
+import { useCreateInstitutionMutation } from "~/hooks/mutations/institutions/useCreateInstitutionMutation";
 
 const CreateAccount = () => {
   const [opened, { open, close }] = useDisclosure(false);
 
   const { t } = useTranslation();
+  const institutionQuery = useInstitutionsQuery();
+  const createAccountMutation = useCreateAccountMutation();
+  const createInstitutionMutation = useCreateInstitutionMutation();
 
   const accountNameField = useField<string>({
     initialValue: "",
@@ -29,68 +31,6 @@ const CreateAccount = () => {
   const institutionField = useField<string>({
     initialValue: "",
     validate: isNotEmpty(t("institution_is_required")),
-  });
-
-  const { request } = useAuth();
-
-  const institutionQuery = useQuery({
-    queryKey: ["institutions"],
-    queryFn: async (): Promise<IInstitution[]> => {
-      const res: AxiosResponse = await request({
-        url: "/api/institution",
-        method: "GET",
-      });
-
-      if (res.status === 200) {
-        return res.data as IInstitution[];
-      }
-
-      return [];
-    },
-  });
-
-  const queryClient = useQueryClient();
-  const doCreateInstitution = useMutation({
-    mutationFn: async (newInstitution: IInstitutionCreateRequest) =>
-      await request({
-        url: "/api/institution",
-        method: "POST",
-        data: newInstitution,
-      }),
-    // Purposely not refeching here since we will refetch in the account creation flow
-    onError: (error: AxiosError) => {
-      notifications.show({
-        message: translateAxiosError(error),
-        color: "var(--button-color-destructive)",
-      });
-    },
-  });
-
-  const doCreateAccount = useMutation({
-    mutationFn: async (newAccount: IAccountCreateRequest) =>
-      await request({
-        url: "/api/account",
-        method: "POST",
-        data: newAccount,
-      }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["accounts"] });
-      await queryClient.invalidateQueries({ queryKey: ["institutions"] });
-
-      notifications.show({
-        message: t("account_created_successfully_message"),
-        color: "var(--button-color-confirm)",
-      });
-
-      accountNameField.reset();
-      institutionField.reset();
-    },
-    onError: (error: AxiosError) => {
-      notifications.show({
-        message: translateAxiosError(error),
-        color: "var(--button-color-destructive)",
-      });
-    },
   });
 
   const onCreateAccount = async () => {
@@ -105,18 +45,18 @@ const CreateAccount = () => {
     }
 
     let institutionForAccount = institutionQuery.data?.find((i) =>
-      areStringsEqual(i.name, institutionField.getValue())
+      areStringsEqual(i.name, institutionField.getValue()),
     );
 
     if (institutionForAccount === undefined) {
-      await doCreateInstitution.mutateAsync({
+      await createInstitutionMutation.mutateAsync({
         name: institutionField.getValue(),
       });
 
       const institutionQueryResult = await institutionQuery.refetch();
 
       institutionForAccount = institutionQueryResult.data?.find((i) =>
-        areStringsEqual(i.name, institutionField.getValue())
+        areStringsEqual(i.name, institutionField.getValue()),
       );
 
       if (institutionForAccount === undefined) {
@@ -128,11 +68,19 @@ const CreateAccount = () => {
       }
     }
 
-    doCreateAccount.mutate({
-      name: accountNameField.getValue(),
-      institutionID: institutionForAccount.id,
-      source: AccountSource.Manual,
-    } as IAccountCreateRequest);
+    createAccountMutation.mutate(
+      {
+        name: accountNameField.getValue(),
+        institutionID: institutionForAccount.id,
+        source: AccountSource.Manual,
+      } as IAccountCreateRequest,
+      {
+        onSuccess: () => {
+          accountNameField.reset();
+          institutionField.reset();
+        },
+      },
+    );
   };
 
   if (institutionQuery.isPending) {
@@ -147,7 +95,11 @@ const CreateAccount = () => {
       <Modal
         opened={opened}
         onClose={close}
-        title={<PrimaryText size="md">{t("create_account")}</PrimaryText>}
+        title={
+          <PrimaryHeading component="span" order={4}>
+            {t("create_account")}
+          </PrimaryHeading>
+        }
       >
         <Stack gap="0.5rem">
           <TextInput
@@ -167,7 +119,10 @@ const CreateAccount = () => {
             elevation={0}
           />
           <Button
-            loading={doCreateAccount.isPending || doCreateInstitution.isPending}
+            loading={
+              createAccountMutation.isPending ||
+              createInstitutionMutation.isPending
+            }
             onClick={onCreateAccount}
           >
             {t("submit")}

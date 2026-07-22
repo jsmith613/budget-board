@@ -1,5 +1,6 @@
 using BudgetBoard.Database.Data;
 using BudgetBoard.Database.Models;
+using BudgetBoard.Service.Helpers;
 using BudgetBoard.Service.Interfaces;
 using BudgetBoard.Service.Models;
 using BudgetBoard.Service.Resources;
@@ -23,7 +24,7 @@ public class LunchFlowAccountService(
         ILunchFlowAccountCreateRequest request
     )
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         if (userData.LunchFlowAccounts.Any(a => a.SyncID == request.SyncID))
         {
@@ -58,7 +59,7 @@ public class LunchFlowAccountService(
         Guid userGuid
     )
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         return userData.LunchFlowAccounts.Select(a => new LunchFlowAccountResponse(a)).ToList();
     }
@@ -69,7 +70,7 @@ public class LunchFlowAccountService(
         ILunchFlowAccountUpdateRequest request
     )
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         var lunchFlowAccount = userData.LunchFlowAccounts.FirstOrDefault(a => a.ID == request.ID);
         if (lunchFlowAccount == null)
@@ -97,7 +98,7 @@ public class LunchFlowAccountService(
     /// <inheritdoc />
     public async Task DeleteLunchFlowAccountAsync(Guid userGuid, Guid accountGuid)
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         var lunchFlowAccount = userData.LunchFlowAccounts.FirstOrDefault(a => a.ID == accountGuid);
         if (lunchFlowAccount == null)
@@ -106,6 +107,14 @@ public class LunchFlowAccountService(
             throw new BudgetBoardServiceException(
                 responseLocalizer["LunchFlowAccountNotFoundError"]
             );
+        }
+
+        if (lunchFlowAccount.LinkedAccountId != null)
+        {
+            var linkedAccount = userData.Accounts.FirstOrDefault(a =>
+                a.ID == lunchFlowAccount.LinkedAccountId
+            );
+            linkedAccount?.Source = AccountSource.Manual;
         }
 
         userData.LunchFlowAccounts.Remove(lunchFlowAccount);
@@ -119,7 +128,7 @@ public class LunchFlowAccountService(
         Guid? linkedAccountGuid
     )
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         var lunchFlowAccount = userData.LunchFlowAccounts.FirstOrDefault(a =>
             a.ID == lunchFlowAccountGuid
@@ -157,29 +166,39 @@ public class LunchFlowAccountService(
         await userDataContext.SaveChangesAsync();
     }
 
-    private async Task<ApplicationUser> GetCurrentUserAsync(string id)
+    public async Task UpdateLunchFlowAccountSyncStartDateAsync(
+        Guid userGuid,
+        Guid lunchFlowAccountGuid,
+        DateOnly? syncStartDate
+    )
     {
-        ApplicationUser? foundUser;
-        try
+        var userData = await GetCurrentUserAsync(userGuid);
+
+        var lunchFlowAccount = userData.LunchFlowAccounts.FirstOrDefault(a =>
+            a.ID == lunchFlowAccountGuid
+        );
+        if (lunchFlowAccount == null)
         {
-            foundUser = await userDataContext
-                .ApplicationUsers.Include(u => u.LunchFlowAccounts)
-                .Include(u => u.Accounts)
-                .AsSplitQuery()
-                .FirstOrDefaultAsync(u => u.Id == new Guid(id));
-        }
-        catch (Exception ex)
-        {
-            logger.LogError("{LogMessage}", logLocalizer["UserDataRetrievalErrorLog", ex.Message]);
-            throw new BudgetBoardServiceException(responseLocalizer["UserDataRetrievalError"]);
+            logger.LogError("{LogMessage}", logLocalizer["LunchFlowAccountNotFoundLog"]);
+            throw new BudgetBoardServiceException(
+                responseLocalizer["LunchFlowAccountNotFoundError"]
+            );
         }
 
-        if (foundUser == null)
-        {
-            logger.LogError("{LogMessage}", logLocalizer["InvalidUserErrorLog"]);
-            throw new BudgetBoardServiceException(responseLocalizer["InvalidUserError"]);
-        }
+        lunchFlowAccount.SyncStartDate = syncStartDate;
 
-        return foundUser;
+        await userDataContext.SaveChangesAsync();
+    }
+
+    private async Task<ApplicationUser> GetCurrentUserAsync(Guid id)
+    {
+        return await UserDataServiceHelper.GetCurrentUserAsync(
+            userDataContext,
+            logger,
+            logLocalizer,
+            responseLocalizer,
+            id,
+            users => users.Include(u => u.LunchFlowAccounts).Include(u => u.Accounts)
+        );
     }
 }

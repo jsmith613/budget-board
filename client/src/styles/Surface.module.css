@@ -1,6 +1,10 @@
 .root {
-  background-color: var(--background-color-surface);
+  --card-bg: var(--background-color-surface);
   border-color: var(--surface-color-border);
+}
+
+[data-mantine-color-scheme] .root {
+  background-color: var(--background-color-surface);
 }
 
 .input {

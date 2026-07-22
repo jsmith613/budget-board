@@ -1,15 +1,18 @@
 import { areStringsEqual } from "~/helpers/utils";
 import {
+  IAccountsWidgetConfiguration,
   INetWorthWidgetCategory,
   INetWorthWidgetConfiguration,
   INetWorthWidgetGroup,
   INetWorthWidgetLine,
 } from "~/models/widgetSettings";
-import { sumAssetsTotalValue } from "./assets";
+import { getAssetsOfTypes, sumAssetsTotalValue } from "./assets";
 import { getAccountsOfTypes, sumAccountsTotalBalance } from "./accounts";
 import { IAccountResponse } from "~/models/account";
 import { IAssetResponse } from "~/models/asset";
 import { ComboboxItem } from "@mantine/core";
+import { IAccountType } from "~/models/accountType";
+import { IAssetType } from "~/models/assetType";
 
 /**
  * Return a string representation for the supplied value, defaulting to an empty string.
@@ -57,7 +60,7 @@ const normalizeNumber = (value: unknown): number => {
  * @returns The parsed object or undefined on failure.
  */
 const safeParseJson = (
-  configuration: string
+  configuration: string,
 ): Record<string, unknown> | undefined => {
   try {
     return JSON.parse(configuration) as Record<string, unknown>;
@@ -73,7 +76,7 @@ const safeParseJson = (
  * @returns An array of normalized widget categories.
  */
 const normalizeCategories = (
-  categories: unknown
+  categories: unknown,
 ): INetWorthWidgetCategory[] => {
   if (!Array.isArray(categories)) {
     return [];
@@ -135,7 +138,7 @@ const normalizeLines = (lines: unknown): INetWorthWidgetLine[] => {
  * @returns The normalized configuration or undefined when parsing fails.
  */
 export const parseNetWorthConfiguration = (
-  configuration?: string
+  configuration?: string,
 ): INetWorthWidgetConfiguration | undefined => {
   if (!configuration) {
     return undefined;
@@ -149,24 +152,30 @@ export const parseNetWorthConfiguration = (
   const groupsRaw = parsed.groups ?? parsed.Groups;
   const normalizedGroups = normalizeGroups(groupsRaw);
 
-  if (normalizedGroups.length === 0) {
-    return undefined;
-  }
-
   return {
     groups: normalizedGroups,
   };
 };
 
-/**
- * Check whether a widgetType string refers to the Net Worth widget.
- *
- * @param widgetType - Raw widget type string from the backend.
- * @returns True when the type matches the Net Worth widget.
- */
-export const isNetWorthWidgetType = (widgetType: string): boolean =>
-  areStringsEqual(widgetType, "Net Worth") ||
-  areStringsEqual(widgetType, "NetWorth");
+export const parseAccountsConfiguration = (
+  configuration?: string,
+): IAccountsWidgetConfiguration => {
+  if (!configuration) {
+    return { accountIds: [] };
+  }
+
+  const parsed = safeParseJson(configuration);
+  if (!parsed) {
+    return { accountIds: [] };
+  }
+
+  const raw = parsed.accountIds ?? parsed.AccountIds;
+  const accountIds = Array.isArray(raw)
+    ? (raw as unknown[]).filter((v): v is string => typeof v === "string")
+    : [];
+
+  return { accountIds };
+};
 
 /**
  * Check whether a given category represents an asset category.
@@ -199,13 +208,25 @@ export const isLineCategory = (category: INetWorthWidgetCategory): boolean =>
  */
 export const getAssetValueForCategory = (
   category: INetWorthWidgetCategory,
-  assets: IAssetResponse[]
+  assets: IAssetResponse[],
 ): number => {
   if (areStringsEqual(category.subtype, "all")) {
     return sumAssetsTotalValue(assets);
   }
+  if (areStringsEqual(category.subtype, "category")) {
+    const filters = [category.value]
+      .filter(Boolean)
+      .map((value) => value as string);
 
-  // Currently, we only support "all" as a subtype for assets.
+    if (filters.length === 0) {
+      return 0;
+    }
+
+    return sumAssetsTotalValue(
+      assets.filter((asset) => filters.includes(asset.type)),
+    );
+  }
+
   return 0;
 };
 
@@ -220,7 +241,9 @@ export const calculateLineTotal = (
   line: INetWorthWidgetLine,
   validAccounts: IAccountResponse[],
   validAssets: IAssetResponse[],
-  lines: INetWorthWidgetLine[]
+  lines: INetWorthWidgetLine[],
+  allAccountTypes: IAccountType[],
+  allAssetTypes: IAssetType[],
 ): number => {
   const categories = line.categories ?? [];
 
@@ -231,7 +254,24 @@ export const calculateLineTotal = (
   return categories.reduce(
     (total: number, category: INetWorthWidgetCategory) => {
       if (isAssetCategory(category)) {
-        return total + getAssetValueForCategory(category, validAssets);
+        if (areStringsEqual(category.subtype, "category")) {
+          const filters = [category.value]
+            .filter(Boolean)
+            .map((value) => value as string);
+
+          if (filters.length === 0) {
+            return total;
+          }
+
+          return (
+            total +
+            sumAssetsTotalValue(
+              getAssetsOfTypes(validAssets, filters, allAssetTypes),
+            )
+          );
+        } else if (areStringsEqual(category.subtype, "all")) {
+          return total + getAssetValueForCategory(category, validAssets);
+        }
       }
 
       if (isAccountCategory(category)) {
@@ -246,7 +286,9 @@ export const calculateLineTotal = (
 
           return (
             total +
-            sumAccountsTotalBalance(getAccountsOfTypes(validAccounts, filters))
+            sumAccountsTotalBalance(
+              getAccountsOfTypes(validAccounts, filters, allAccountTypes),
+            )
           );
         }
 
@@ -260,7 +302,9 @@ export const calculateLineTotal = (
             lineMatch,
             validAccounts,
             validAssets,
-            lines
+            lines,
+            allAccountTypes,
+            allAssetTypes,
           );
           return total + lineTotal;
         }
@@ -268,7 +312,7 @@ export const calculateLineTotal = (
 
       return total;
     },
-    0
+    0,
   );
 };
 
@@ -284,6 +328,7 @@ export const NET_WORTH_CATEGORY_ACCOUNT_SUBTYPES: ComboboxItem[] = [
 
 export const NET_WORTH_CATEGORY_ASSET_SUBTYPES: ComboboxItem[] = [
   { value: "all", label: "all" },
+  { value: "category", label: "category" },
 ];
 
 export const NET_WORTH_CATEGORY_LINE_SUBTYPES: ComboboxItem[] = [

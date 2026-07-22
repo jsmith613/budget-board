@@ -46,6 +46,16 @@ public class ApplicationUser : IdentityUser<Guid>
     public ICollection<Category> TransactionCategories { get; set; } = [];
 
     /// <summary>
+    /// Collection of account types defined by the user.
+    /// </summary>
+    public ICollection<AccountType> AccountTypes { get; set; } = [];
+
+    /// <summary>
+    /// Collection of asset types defined by the user.
+    /// </summary>
+    public ICollection<AssetType> AssetTypes { get; set; } = [];
+
+    /// <summary>
     /// Collection of financial institutions associated with the user.
     /// </summary>
     public ICollection<Institution> Institutions { get; set; } = [];

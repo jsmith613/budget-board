@@ -1,29 +1,32 @@
 import { Button, Stack } from "@mantine/core";
-
 import { useField } from "@mantine/form";
-import { notifications } from "@mantine/notifications";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { AxiosError } from "axios";
 import React from "react";
-import { useAuth } from "~/providers/AuthProvider/AuthProvider";
 import { getCurrencySymbol } from "~/helpers/currency";
-import { translateAxiosError } from "~/helpers/requests";
-import { IBalanceCreateRequest } from "~/models/balance";
 import PrimaryText from "~/components/core/Text/PrimaryText/PrimaryText";
 import { useTranslation } from "react-i18next";
-import { useDate } from "~/providers/DateProvider/DateProvider";
+import { useLocale } from "~/providers/LocaleProvider/LocaleProvider";
 import DateInput from "~/components/core/Input/DateInput/DateInput";
 import NumberInput from "~/components/core/Input/NumberInput/NumberInput";
+import { useCreateBalanceMutation } from "~/hooks/mutations/balances/useCreateBalanceMutation";
+import { useUserSettings } from "~/providers/UserSettingsProvider/UserSettingsProvider";
 
 interface AddBalanceProps {
   accountId: string;
-  currency: string;
 }
 
 const AddBalance = (props: AddBalanceProps): React.ReactNode => {
   const { t } = useTranslation();
-  const { dayjs, longDateFormat } = useDate();
-  const { request } = useAuth();
+  const {
+    dayjs,
+    dayjsLocale,
+    longDateFormat,
+    thousandsSeparator,
+    decimalSeparator,
+  } = useLocale();
+  const { preferredCurrency } = useUserSettings();
+  const createBalanceMutation = useCreateBalanceMutation({
+    accountId: props.accountId,
+  });
 
   const dateField = useField<Date>({
     initialValue: dayjs().toDate(),
@@ -32,51 +35,31 @@ const AddBalance = (props: AddBalanceProps): React.ReactNode => {
     initialValue: 0,
   });
 
-  const queryClient = useQueryClient();
-  const doCreateBalance = useMutation({
-    mutationFn: async (newBalance: IBalanceCreateRequest) =>
-      await request({
-        url: "/api/balance",
-        method: "POST",
-        data: newBalance,
-      }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["institutions"] });
-      await queryClient.invalidateQueries({
-        queryKey: ["balances", props.accountId],
-      });
-    },
-    onError: (error: AxiosError) =>
-      notifications.show({
-        color: "var(--button-color-destructive)",
-        message: translateAxiosError(error),
-      }),
-  });
-
   return (
     <Stack gap={10}>
       <DateInput
         {...dateField.getInputProps()}
         label={<PrimaryText size="sm">{t("date")}</PrimaryText>}
         valueFormat={longDateFormat}
-        locale={dayjs.locale()}
+        locale={dayjsLocale}
         elevation={0}
       />
       <NumberInput
         {...amountField.getInputProps()}
         label={<PrimaryText size="sm">{t("amount")}</PrimaryText>}
-        prefix={getCurrencySymbol(props.currency)}
+        prefix={getCurrencySymbol(preferredCurrency)}
         decimalScale={2}
-        thousandSeparator=","
+        decimalSeparator={decimalSeparator}
+        thousandSeparator={thousandsSeparator}
         elevation={0}
       />
       <Button
-        loading={doCreateBalance.isPending}
+        loading={createBalanceMutation.isPending}
         onClick={() =>
-          doCreateBalance.mutate({
+          createBalanceMutation.mutate({
             accountID: props.accountId,
             amount: Number(amountField.getValue()),
-            dateTime: dayjs(dateField.getValue()).toDate(),
+            date: dayjs(dateField.getValue()).format("YYYY-MM-DD"),
           })
         }
       >

@@ -14,27 +14,23 @@ namespace BudgetBoard.Service;
 public class AccountService(
     ILogger<IAccountService> logger,
     UserDataContext userDataContext,
+    IInstitutionService institutionService,
+    ITransactionService transactionService,
     INowProvider nowProvider,
     IStringLocalizer<ResponseStrings> responseLocalizer,
     IStringLocalizer<LogStrings> logLocalizer
 ) : IAccountService
 {
-    private readonly ILogger<IAccountService> _logger = logger;
-    private readonly UserDataContext _userDataContext = userDataContext;
-    private readonly INowProvider _nowProvider = nowProvider;
-    private readonly IStringLocalizer<ResponseStrings> _responseLocalizer = responseLocalizer;
-    private readonly IStringLocalizer<LogStrings> _logLocalizer = logLocalizer;
-
     /// <inheritdoc />
     public async Task CreateAccountAsync(Guid userGuid, IAccountCreateRequest request)
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         var institution = userData.Institutions.SingleOrDefault(i => i.ID == request.InstitutionID);
         if (institution == null)
         {
-            _logger.LogError("{LogMessage}", _logLocalizer["InvalidInstitutionIDLog"]);
-            throw new BudgetBoardServiceException(_responseLocalizer["InvalidInstitutionIDError"]);
+            logger.LogError("{LogMessage}", logLocalizer["InvalidInstitutionIDLog"]);
+            throw new BudgetBoardServiceException(responseLocalizer["InvalidInstitutionIDError"]);
         }
 
         // Creating an account under a deleted institution should restore the institution.
@@ -43,62 +39,64 @@ public class AccountService(
         var newAccount = new Account
         {
             Name = request.Name,
+            Source = AccountSource.Manual,
             InstitutionID = request.InstitutionID,
-            Type = request.Type,
-            Subtype = request.Subtype,
-            HideTransactions = request.HideTransactions,
-            HideAccount = request.HideAccount,
-            Source = request.Source ?? AccountSource.Manual,
             UserID = userData.Id,
         };
 
-        _userDataContext.Accounts.Add(newAccount);
-        await _userDataContext.SaveChangesAsync();
+        userDataContext.Accounts.Add(newAccount);
+        await userDataContext.SaveChangesAsync();
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<IAccountResponse>> ReadAccountsAsync(
-        Guid userGuid,
-        Guid accountGuid = default
-    )
+    public async Task<IReadOnlyList<IAccountResponse>> ReadAccountsAsync(Guid userGuid)
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
-
+        var userData = await GetCurrentUserAsync(userGuid);
         var accounts = userData.Accounts.ToList();
-
-        if (accountGuid != default)
-        {
-            accounts = [.. accounts.Where(a => a.ID == accountGuid)];
-            if (accounts.Count == 0)
-            {
-                _logger.LogError("{LogMessage}", _logLocalizer["AccountNotFoundLog"]);
-                throw new BudgetBoardServiceException(_responseLocalizer["AccountNotFoundError"]);
-            }
-        }
-
         return accounts.OrderBy(a => a.Index).Select(a => new AccountResponse(a)).ToList();
     }
 
     /// <inheritdoc />
-    public async Task UpdateAccountAsync(Guid userGuid, IAccountUpdateRequest editedAccount)
+    public async Task UpdateAccountAsync(Guid userGuid, IAccountUpdateRequest request)
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
+        var account = GetAccountById(userData, request.ID);
 
-        var account = userData.Accounts.FirstOrDefault(a => a.ID == editedAccount.ID);
-        if (account == null)
+        if (request.Name.IsSpecified && !string.IsNullOrWhiteSpace(request.Name.Value))
         {
-            _logger.LogError("{LogMessage}", _logLocalizer["AccountEditNotFoundLog"]);
-            throw new BudgetBoardServiceException(_responseLocalizer["AccountEditNotFoundError"]);
+            account.Name = request.Name.Value;
+        }
+        if (request.Type.IsSpecified)
+        {
+            account.Type = request.Type.Value ?? string.Empty;
+        }
+        if (request.HideTransactions.IsSpecified)
+        {
+            account.HideTransactions = request.HideTransactions.Value;
+        }
+        if (request.HideAccount.IsSpecified)
+        {
+            account.HideAccount = request.HideAccount.Value;
+        }
+        if (request.InterestRate.IsSpecified)
+        {
+            account.InterestRate = request.InterestRate.Value;
+        }
+        if (request.Source.IsSpecified)
+        {
+            if (
+                string.IsNullOrEmpty(request.Source.Value)
+                || !AccountSource.IsValid(request.Source.Value)
+            )
+            {
+                throw new BudgetBoardServiceException(
+                    responseLocalizer["InvalidAccountSourceError"]
+                );
+            }
+            account.Source = request.Source.Value!;
         }
 
-        if (string.IsNullOrEmpty(editedAccount.Name))
-        {
-            _logger.LogError("{LogMessage}", _logLocalizer["AccountEditEmptyNameLog"]);
-            throw new BudgetBoardServiceException(_responseLocalizer["AccountEditEmptyNameError"]);
-        }
-
-        _userDataContext.Entry(account).CurrentValues.SetValues(editedAccount);
-        await _userDataContext.SaveChangesAsync();
+        await userDataContext.SaveChangesAsync();
     }
 
     /// <inheritdoc />
@@ -108,33 +106,55 @@ public class AccountService(
         bool deleteTransactions = false
     )
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
+        var account = GetAccountById(userData, accountGuid);
 
-        var account = userData.Accounts.FirstOrDefault(a => a.ID == accountGuid);
-        if (account == null)
-        {
-            _logger.LogError("{LogMessage}", _logLocalizer["AccountDeleteNotFoundLog"]);
-            throw new BudgetBoardServiceException(_responseLocalizer["AccountDeleteNotFoundError"]);
-        }
-
-        var now = _nowProvider.UtcNow;
-        account.Deleted = now;
+        var utcNow = nowProvider.UtcNow;
+        account.Deleted = utcNow;
+        account.Type = string.Empty;
 
         if (deleteTransactions)
         {
-            foreach (var transaction in account.Transactions)
-            {
-                transaction.Deleted = now;
-            }
+            await transactionService.DeleteTransactionsAsync(
+                userGuid,
+                account.Transactions.Select(t => t.ID),
+                true
+            );
         }
 
         if (account.Institution?.Accounts.All(a => a.Deleted != null) ?? false)
         {
-            account.Institution.Deleted = now;
-            account.Institution.Index = 0;
+            await institutionService.DeleteInstitutionAsync(
+                userGuid,
+                account.Institution.ID,
+                deleteTransactions,
+                true
+            );
         }
 
-        await _userDataContext.SaveChangesAsync();
+        var lunchFlowAccount = await userDataContext.LunchFlowAccounts.FirstOrDefaultAsync(a =>
+            a.LinkedAccountId == accountGuid
+        );
+        if (lunchFlowAccount != null)
+        {
+            lunchFlowAccount.LinkedAccountId = null;
+            lunchFlowAccount.LastSync = null;
+        }
+
+        var simpleFinAccount = await userDataContext.SimpleFinAccounts.FirstOrDefaultAsync(a =>
+            a.LinkedAccountId == accountGuid
+        );
+        if (simpleFinAccount != null)
+        {
+            simpleFinAccount.LinkedAccountId = null;
+            simpleFinAccount.LastSync = null;
+        }
+
+        // It's important that this gets set after we delete the transactions, since the
+        // source determines whether transactions affect the account balance.
+        account.Source = AccountSource.Manual;
+
+        await userDataContext.SaveChangesAsync();
     }
 
     /// <inheritdoc />
@@ -144,33 +164,22 @@ public class AccountService(
         bool restoreTransactions = false
     )
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
-
-        var account = userData.Accounts.FirstOrDefault(a => a.ID == accountGuid);
-        if (account == null)
-        {
-            _logger.LogError("{LogMessage}", _logLocalizer["AccountRestoreNotFoundLog"]);
-            throw new BudgetBoardServiceException(
-                _responseLocalizer["AccountRestoreNotFoundError"]
-            );
-        }
+        var userData = await GetCurrentUserAsync(userGuid);
+        var account = GetAccountById(userData, accountGuid);
 
         account.Deleted = null;
+        account.Institution?.Deleted = null;
 
         if (restoreTransactions)
         {
-            foreach (var transaction in account.Transactions)
-            {
-                transaction.Deleted = null;
-            }
+            await transactionService.RestoreTransactionsAsync(
+                userGuid,
+                account.Transactions.Where(t => t.Deleted != null).Select(t => t.ID),
+                true
+            );
         }
 
-        if (account.Institution != null)
-        {
-            account.Institution.Deleted = null;
-        }
-
-        await _userDataContext.SaveChangesAsync();
+        await userDataContext.SaveChangesAsync();
     }
 
     /// <inheritdoc />
@@ -179,75 +188,67 @@ public class AccountService(
         IEnumerable<IAccountIndexRequest> orderedAccounts
     )
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         foreach (var orderedAccount in orderedAccounts)
         {
-            var account = userData.Accounts.FirstOrDefault(a => a.ID == orderedAccount.ID);
-            if (account == null)
-            {
-                _logger.LogError("{LogMessage}", _logLocalizer["AccountOrderNotFoundLog"]);
-                throw new BudgetBoardServiceException(
-                    _responseLocalizer["AccountOrderNotFoundError"]
-                );
-            }
-
+            var account = GetAccountById(userData, orderedAccount.ID);
             account.Index = orderedAccount.Index;
         }
 
-        await _userDataContext.SaveChangesAsync();
+        await userDataContext.SaveChangesAsync();
     }
 
     /// <inheritdoc />
-    public async Task UpdateAccountSourceAsync(Guid userGuid, Guid accountGuid, string source)
+    public async Task PermanentlyDeleteAccountAsync(Guid userGuid, Guid accountGuid)
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
-
-        var account = userData.Accounts.FirstOrDefault(a => a.ID == accountGuid);
-        if (account == null)
+        var userData = await GetCurrentUserAsync(userGuid);
+        var account = GetAccountById(userData, accountGuid);
+        if (account.Deleted == null)
         {
-            _logger.LogError("{LogMessage}", _logLocalizer["AccountSourceUpdateNotFoundLog"]);
+            logger.LogError("{LogMessage}", logLocalizer["AccountPermanentDeleteNotDeletedLog"]);
             throw new BudgetBoardServiceException(
-                _responseLocalizer["AccountSourceUpdateNotFoundError"]
+                responseLocalizer["AccountPermanentDeleteNotDeletedError"]
             );
         }
 
-        account.Source = source;
-
-        await _userDataContext.SaveChangesAsync();
+        userDataContext.Transactions.RemoveRange(account.Transactions);
+        userDataContext.Balances.RemoveRange(account.Balances);
+        userDataContext.Accounts.Remove(account);
+        await userDataContext.SaveChangesAsync();
     }
 
-    private async Task<ApplicationUser> GetCurrentUserAsync(string id)
+    private async Task<ApplicationUser> GetCurrentUserAsync(Guid id)
     {
-        ApplicationUser? foundUser;
-        try
+        return await UserDataServiceHelper.GetCurrentUserAsync(
+            userDataContext,
+            logger,
+            logLocalizer,
+            responseLocalizer,
+            id,
+            users =>
+                users
+                    .Include(u => u.Accounts)
+                    .ThenInclude(a => a.Transactions)
+                    .Include(u => u.Accounts)
+                    .ThenInclude(a => a.Balances)
+                    .Include(u => u.Accounts)
+                    .ThenInclude(a => a.Institution)
+                    .Include(u => u.Institutions)
+                    .Include(u => u.LunchFlowAccounts)
+                    .Include(u => u.SimpleFinAccounts)
+        );
+    }
+
+    private Account GetAccountById(ApplicationUser userData, Guid accountId)
+    {
+        var account = userData.Accounts.FirstOrDefault(a => a.ID == accountId);
+        if (account == null)
         {
-            foundUser = await _userDataContext
-                .ApplicationUsers.Include(u => u.Accounts)
-                .ThenInclude(a => a.Transactions)
-                .Include(u => u.Accounts)
-                .ThenInclude(a => a.Balances)
-                .Include(u => u.Accounts)
-                .ThenInclude(a => a.Institution)
-                .Include(u => u.Institutions)
-                .AsSplitQuery()
-                .FirstOrDefaultAsync(u => u.Id == new Guid(id));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(
-                "{LogMessage}",
-                _logLocalizer["UserDataRetrievalErrorLog", ex.Message]
-            );
-            throw new BudgetBoardServiceException(_responseLocalizer["UserDataRetrievalError"]);
+            logger.LogError("{LogMessage}", logLocalizer["AccountNotFoundLog"]);
+            throw new BudgetBoardServiceException(responseLocalizer["AccountNotFoundError"]);
         }
 
-        if (foundUser == null)
-        {
-            _logger.LogError("{LogMessage}", _logLocalizer["InvalidUserErrorLog"]);
-            throw new BudgetBoardServiceException(_responseLocalizer["InvalidUserError"]);
-        }
-
-        return foundUser;
+        return account;
     }
 }

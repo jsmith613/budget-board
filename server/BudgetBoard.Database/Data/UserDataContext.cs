@@ -19,6 +19,7 @@ public class UserDataContext(DbContextOptions<UserDataContext> options)
 
     public DbSet<ApplicationUser> ApplicationUsers { get; set; }
     public DbSet<Account> Accounts { get; set; }
+    public DbSet<AccountType> AccountTypes { get; set; }
     public DbSet<Transaction> Transactions { get; set; }
     public DbSet<Budget> Budgets { get; set; }
     public DbSet<Goal> Goals { get; set; }
@@ -31,6 +32,7 @@ public class UserDataContext(DbContextOptions<UserDataContext> options)
     public DbSet<RuleCondition> RuleConditions { get; set; }
     public DbSet<RuleAction> RuleActions { get; set; }
     public DbSet<Asset> Assets { get; set; }
+    public DbSet<AssetType> AssetTypes { get; set; }
     public DbSet<Value> Values { get; set; }
     public DbSet<WidgetSettings> WidgetSettings { get; set; }
     public DbSet<SimpleFinOrganization> SimpleFinOrganizations { get; set; }
@@ -90,6 +92,8 @@ public class UserDataContext(DbContextOptions<UserDataContext> options)
                 a.ToTable("Account");
             }
         );
+
+        modelBuilder.Entity<AccountType>().ToTable("AccountType");
 
         modelBuilder.Entity<Transaction>().ToTable("Transaction");
 
@@ -157,6 +161,8 @@ public class UserDataContext(DbContextOptions<UserDataContext> options)
             a.ToTable("Asset");
         });
 
+        modelBuilder.Entity<AssetType>().ToTable("AssetType");
+
         modelBuilder.Entity<Value>().ToTable("Value");
 
         modelBuilder.Entity<WidgetSettings>(w =>
@@ -205,7 +211,11 @@ public class UserDataContext(DbContextOptions<UserDataContext> options)
             // 1. Delete the large object if it already exists
             if (objectId != 0)
             {
-                using var unlinkCmd = new NpgsqlCommand("SELECT lo_unlink(@oid)", conn, transaction);
+                using var unlinkCmd = new NpgsqlCommand(
+                    "SELECT lo_unlink(@oid)",
+                    conn,
+                    transaction
+                );
                 unlinkCmd.Parameters.AddWithValue("oid", objectId);
                 await unlinkCmd.ExecuteNonQueryAsync();
             }
@@ -218,12 +228,19 @@ public class UserDataContext(DbContextOptions<UserDataContext> options)
             using var openCmd = new NpgsqlCommand("SELECT lo_open(@oid, @mode)", conn, transaction);
             openCmd.Parameters.AddWithValue("oid", objectId);
             openCmd.Parameters.AddWithValue("mode", INV_READ | INV_WRITE);
-            int fd = (int)await openCmd.ExecuteScalarAsync();
+            int fd = (int)(
+                await openCmd.ExecuteScalarAsync()
+                ?? throw new InvalidOperationException("lo_open returned null")
+            );
 
             try
             {
                 // 4. Write - Use lo_write(fd, data)
-                using var writeCmd = new NpgsqlCommand("SELECT lowrite(@fd, @data)", conn, transaction);
+                using var writeCmd = new NpgsqlCommand(
+                    "SELECT lowrite(@fd, @data)",
+                    conn,
+                    transaction
+                );
                 writeCmd.Parameters.AddWithValue("fd", fd);
                 writeCmd.Parameters.AddWithValue("data", data);
                 await writeCmd.ExecuteNonQueryAsync();
@@ -267,23 +284,32 @@ public class UserDataContext(DbContextOptions<UserDataContext> options)
             using var openCmd = new NpgsqlCommand("SELECT lo_open(@oid, @mode)", conn, transaction);
             openCmd.Parameters.AddWithValue("oid", objectId);
             openCmd.Parameters.AddWithValue("mode", INV_READ | INV_WRITE);
-            int fd = (int)await openCmd.ExecuteScalarAsync();
+            int fd = (int)(
+                await openCmd.ExecuteScalarAsync()
+                ?? throw new InvalidOperationException("lo_open returned null")
+            );
 
             try
             {
                 // 2. Read in chunks using lo_read
                 int bufferSize = 8192;
-                byte[] buffer;
+                byte[]? buffer;
                 bool eof = false;
 
                 while (!eof)
                 {
-                    await using (var readCmd = new NpgsqlCommand("SELECT loread(@fd, @len)", conn, transaction))
+                    await using (
+                        var readCmd = new NpgsqlCommand(
+                            "SELECT loread(@fd, @len)",
+                            conn,
+                            transaction
+                        )
+                    )
                     {
                         readCmd.Parameters.AddWithValue("fd", fd);
                         readCmd.Parameters.AddWithValue("len", bufferSize);
 
-                        buffer = (byte[]) await readCmd.ExecuteScalarAsync();
+                        buffer = (byte[]?)await readCmd.ExecuteScalarAsync();
                         if (buffer == null || buffer.Length == 0)
                         {
                             eof = true;

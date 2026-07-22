@@ -2,9 +2,9 @@ import { ActionIcon, Group } from "@mantine/core";
 import { PencilIcon } from "lucide-react";
 import StatusText from "~/components/core/Text/StatusText/StatusText";
 import PrimaryText from "~/components/core/Text/PrimaryText/PrimaryText";
-import { convertNumberToCurrency } from "~/helpers/currency";
+import { convertNumberToCurrency, SignDisplay } from "~/helpers/currency";
 import { IValueResponse } from "~/models/value";
-import { useDate } from "~/providers/DateProvider/DateProvider";
+import { useLocale } from "~/providers/LocaleProvider/LocaleProvider";
 
 interface ValueItemContentProps {
   value: IValueResponse;
@@ -13,12 +13,12 @@ interface ValueItemContentProps {
 }
 
 const ValueItemContent = (props: ValueItemContentProps): React.ReactNode => {
-  const { dayjs, longDateFormat } = useDate();
+  const { dayjs, longDateFormat, intlLocale } = useLocale();
   return (
     <Group justify="space-between" align="center">
       <Group gap="0.5rem">
         <PrimaryText size="md">
-          {dayjs(props.value.dateTime).format(longDateFormat)}
+          {dayjs(props.value.date).format(longDateFormat)}
         </PrimaryText>
         <ActionIcon
           variant="transparent"
@@ -32,7 +32,13 @@ const ValueItemContent = (props: ValueItemContentProps): React.ReactNode => {
         </ActionIcon>
       </Group>
       <StatusText amount={props.value.amount} size="md">
-        {convertNumberToCurrency(props.value.amount, true, props.userCurrency)}
+        {convertNumberToCurrency(
+          props.value.amount,
+          true,
+          props.userCurrency,
+          SignDisplay.Auto,
+          intlLocale,
+        )}
       </StatusText>
     </Group>
   );

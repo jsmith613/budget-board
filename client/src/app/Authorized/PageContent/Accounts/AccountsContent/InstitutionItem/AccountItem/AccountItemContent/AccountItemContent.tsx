@@ -4,19 +4,26 @@ import { useTranslation } from "react-i18next";
 import DimmedText from "~/components/core/Text/DimmedText/DimmedText";
 import PrimaryText from "~/components/core/Text/PrimaryText/PrimaryText";
 import StatusText from "~/components/core/Text/StatusText/StatusText";
-import { convertNumberToCurrency } from "~/helpers/currency";
+import {
+  getIsParentAccountType,
+  getParentAccountType,
+} from "~/helpers/accountType";
+import { convertNumberToCurrency, SignDisplay } from "~/helpers/currency";
 import { AccountSource, IAccountResponse } from "~/models/account";
-import { useDate } from "~/providers/DateProvider/DateProvider";
+import { useAccountTypes } from "~/providers/AccountTypeProvider/AccountTypeProvider";
+import { useLocale } from "~/providers/LocaleProvider/LocaleProvider";
+import { useUserSettings } from "~/providers/UserSettingsProvider/UserSettingsProvider";
 
 interface IAccountItemContentProps {
   account: IAccountResponse;
-  userCurrency: string;
   toggle: () => void;
 }
 
 const AccountItemContent = (props: IAccountItemContentProps) => {
   const { t } = useTranslation();
-  const { dayjs, dateFormat } = useDate();
+  const { dayjs, dateFormat, intlLocale } = useLocale();
+  const { preferredCurrency } = useUserSettings();
+  const { allAccountTypes } = useAccountTypes();
 
   const getAccountSourceBadgeColor = (): string => {
     switch (props.account.source) {
@@ -28,6 +35,33 @@ const AccountItemContent = (props: IAccountItemContentProps) => {
       default:
         return "gray";
     }
+  };
+
+  const getAccountTypeDisplay = (): React.ReactNode => {
+    if (props.account.type?.length === 0) {
+      return <DimmedText size="sm">{t("no_type")}</DimmedText>;
+    }
+
+    const isParentAccountType = getIsParentAccountType(
+      props.account.type,
+      allAccountTypes,
+    );
+
+    const accountType = isParentAccountType
+      ? props.account.type
+      : getParentAccountType(props.account.type, allAccountTypes);
+
+    return (
+      <Group gap="0.25rem">
+        <DimmedText size="sm">{accountType}</DimmedText>
+        {!isParentAccountType && (
+          <>
+            <ChevronRightIcon size={14} />
+            <DimmedText size="sm">{props.account.type}</DimmedText>
+          </>
+        )}
+      </Group>
+    );
   };
 
   return (
@@ -51,14 +85,19 @@ const AccountItemContent = (props: IAccountItemContentProps) => {
           </ActionIcon>
           <Badge>
             {t("interest_rate_message", {
-              rate: ((props.account.interestRate ?? 0) * 100).toFixed(2),
+              rate: new Intl.NumberFormat(intlLocale, {
+                style: "percent",
+                maximumFractionDigits: 2,
+              }).format(props.account.interestRate ?? 0),
             })}
           </Badge>
           {props.account.hideAccount && (
-            <Badge bg="var(--button-color-warning)">{t("hidden")}</Badge>
+            <Badge bg="var(--accent-color-orange)">{t("hidden")}</Badge>
           )}
           {props.account.hideTransactions && (
-            <Badge bg="purple">{t("hidden_transactions")}</Badge>
+            <Badge bg="var(--accent-color-purple)">
+              {t("hidden_transactions")}
+            </Badge>
           )}
           <Badge bg={getAccountSourceBadgeColor()}>
             {t(props.account.source)}
@@ -68,28 +107,18 @@ const AccountItemContent = (props: IAccountItemContentProps) => {
           {convertNumberToCurrency(
             props.account.currentBalance,
             true,
-            props.userCurrency,
+            preferredCurrency,
+            SignDisplay.Auto,
+            intlLocale,
           )}
         </StatusText>
       </Group>
       <Group justify="space-between" align="center">
-        {props.account.type ? (
-          <Group gap="0.25rem">
-            <DimmedText size="sm">{props.account.type}</DimmedText>
-            {props.account.subtype && (
-              <>
-                <ChevronRightIcon size={14} />
-                <DimmedText size="sm">{props.account.subtype}</DimmedText>
-              </>
-            )}
-          </Group>
-        ) : (
-          <DimmedText size="sm">{t("no_type")}</DimmedText>
-        )}
+        {getAccountTypeDisplay()}
         <DimmedText size="sm">
           {t("last_updated", {
             date: dayjs(props.account.balanceDate).isValid()
-              ? dayjs(props.account.balanceDate).format(`${dateFormat} LT`)
+              ? dayjs(props.account.balanceDate).format(`${dateFormat}`)
               : t("never"),
           })}
         </DimmedText>

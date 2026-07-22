@@ -27,7 +27,7 @@ public class SimpleFinService(
     IStringLocalizer<LogStrings> logLocalizer
 ) : ISimpleFinService
 {
-    private const int MAX_SYNC_LOOKBACK_UNIX = 31449600; // 364 days
+    private const int MAX_SYNC_LOOKBACK_UNIX = 7689600; // 89 days
     private const long UNIX_MONTH = 2629743;
     private const long UNIX_WEEK = 604800;
 
@@ -39,7 +39,7 @@ public class SimpleFinService(
     /// <inheritdoc />
     public async Task ConfigureAccessTokenAsync(Guid userGuid, string setupToken)
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         var decodeAccessTokenResponse = await DecodeAccessToken(setupToken);
         if (!decodeAccessTokenResponse.IsSuccessStatusCode)
@@ -70,7 +70,7 @@ public class SimpleFinService(
     public async Task<IList<string>> RefreshAccountsAsync(Guid userGuid)
     {
         var errors = new List<string>();
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         try
         {
@@ -114,7 +114,7 @@ public class SimpleFinService(
     /// <inheritdoc />
     public async Task<IList<string>> SyncTransactionHistoryAsync(Guid userGuid)
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         logger.LogInformation("{LogMessage}", logLocalizer["SimpleFinTokenConfiguredLog"]);
 
@@ -180,7 +180,7 @@ public class SimpleFinService(
     /// <inheritdoc />
     public async Task RemoveAccessTokenAsync(Guid userGuid)
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         userData.SimpleFinAccessToken = string.Empty;
 
@@ -190,41 +190,27 @@ public class SimpleFinService(
         await RemoveSimpleFinDataAsync(userGuid);
     }
 
-    private async Task<ApplicationUser> GetCurrentUserAsync(string id)
+    private async Task<ApplicationUser> GetCurrentUserAsync(Guid id)
     {
-        ApplicationUser? foundUser;
-        try
-        {
-            foundUser = await userDataContext
-                .ApplicationUsers.Include(u => u.Accounts)
-                .ThenInclude(a => a.Transactions)
-                .Include(u => u.Accounts)
-                .ThenInclude(a => a.Balances)
-                .Include(u => u.Institutions)
-                .Include(u => u.UserSettings)
-                .Include(u => u.SimpleFinOrganizations)
-                .ThenInclude(o => o.Accounts)
-                .Include(u => u.TransactionCategories)
-                .AsSplitQuery()
-                .FirstOrDefaultAsync(u => u.Id == new Guid(id));
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(
-                ex,
-                "{LogMessage}",
-                logLocalizer["UserDataRetrievalErrorLog", ex.Message]
-            );
-            throw new BudgetBoardServiceException(responseLocalizer["UserDataRetrievalError"]);
-        }
-
-        if (foundUser == null)
-        {
-            logger.LogError("{LogMessage}", logLocalizer["InvalidUserErrorLog"]);
-            throw new BudgetBoardServiceException(responseLocalizer["InvalidUserError"]);
-        }
-
-        return foundUser;
+        return await UserDataServiceHelper.GetCurrentUserAsync(
+            userDataContext,
+            logger,
+            logLocalizer,
+            responseLocalizer,
+            id,
+            users =>
+                users
+                    .Include(u => u.Accounts)
+                    .ThenInclude(a => a.Transactions)
+                    .Include(u => u.Accounts)
+                    .ThenInclude(a => a.Balances)
+                    .Include(u => u.Institutions)
+                    .Include(u => u.UserSettings)
+                    .Include(u => u.SimpleFinOrganizations)
+                    .ThenInclude(o => o.Accounts)
+                    .Include(u => u.SimpleFinAccounts)
+                    .Include(u => u.TransactionCategories)
+        );
     }
 
     private async Task<HttpResponseMessage> DecodeAccessToken(string setupToken)
@@ -318,10 +304,14 @@ public class SimpleFinService(
 
         if (forceSyncLookbackMonths > 0)
         {
-            return nowUnix - (UNIX_MONTH * forceSyncLookbackMonths);
+            // Cap the maximum lookback to prevent SimpleFIN from complaining.
+            var forceSyncLookbackUnix = UNIX_MONTH * forceSyncLookbackMonths;
+            return forceSyncLookbackUnix > MAX_SYNC_LOOKBACK_UNIX
+                ? nowUnix - MAX_SYNC_LOOKBACK_UNIX
+                : nowUnix - forceSyncLookbackUnix;
         }
 
-        // SimpleFIN can lookback a maximum of 365 days (not inclusive).
+        // SimpleFIN can lookback a maximum of 90 days (not inclusive).
         if (earliestBalanceTimestamp < nowUnix - MAX_SYNC_LOOKBACK_UNIX)
         {
             return nowUnix - MAX_SYNC_LOOKBACK_UNIX;
@@ -427,100 +417,119 @@ public class SimpleFinService(
 
         foreach (var simpleFinAccount in simpleFinAccounts)
         {
-            var existingOrganization = userData.SimpleFinOrganizations.SingleOrDefault(o =>
-                o.Domain == simpleFinAccount.Org.Domain
-            );
-            if (existingOrganization == null)
+            try
             {
-                var simpleFinOrganization = simpleFinAccount.Org;
-                await simpleFinOrganizationService.CreateSimpleFinOrganizationAsync(
-                    userData.Id,
-                    new SimpleFinOrganizationCreateRequest
-                    {
-                        Domain = simpleFinOrganization.Domain,
-                        SimpleFinUrl = simpleFinOrganization.SimpleFinUrl,
-                        Name = simpleFinOrganization.Name,
-                        Url = simpleFinOrganization.Url,
-                        SyncID = simpleFinOrganization.SyncID,
-                    }
-                );
-
-                existingOrganization = userData.SimpleFinOrganizations.SingleOrDefault(o =>
+                var existingOrganization = userData.SimpleFinOrganizations.SingleOrDefault(o =>
                     o.Domain == simpleFinAccount.Org.Domain
                 );
                 if (existingOrganization == null)
                 {
-                    logger.LogError(
-                        "{LogMessage}",
-                        logLocalizer[
-                            "SyncSimpleFinOrganizationCreationErrorLog",
-                            simpleFinAccount.Name
-                        ]
+                    var simpleFinOrganization = simpleFinAccount.Org;
+                    await simpleFinOrganizationService.CreateSimpleFinOrganizationAsync(
+                        userData.Id,
+                        new SimpleFinOrganizationCreateRequest
+                        {
+                            Domain = simpleFinOrganization.Domain,
+                            SimpleFinUrl = simpleFinOrganization.SimpleFinUrl,
+                            Name = simpleFinOrganization.Name,
+                            Url = simpleFinOrganization.Url,
+                            SyncID = simpleFinOrganization.SyncID,
+                        }
                     );
-                    errors.Add(
-                        responseLocalizer[
-                            "SyncSimpleFinOrganizationCreationError",
-                            simpleFinAccount.Name
-                        ]
+
+                    existingOrganization = userData.SimpleFinOrganizations.SingleOrDefault(o =>
+                        o.Domain == simpleFinAccount.Org.Domain
                     );
-                    continue;
+                    if (existingOrganization == null)
+                    {
+                        logger.LogError(
+                            "{LogMessage}",
+                            logLocalizer[
+                                "SyncSimpleFinOrganizationCreationErrorLog",
+                                simpleFinAccount.Name
+                            ]
+                        );
+                        errors.Add(
+                            responseLocalizer[
+                                "SyncSimpleFinOrganizationCreationError",
+                                simpleFinAccount.Name
+                            ]
+                        );
+                        continue;
+                    }
+                }
+                else
+                {
+                    await simpleFinOrganizationService.UpdateSimpleFinOrganizationAsync(
+                        userData.Id,
+                        new SimpleFinOrganizationUpdateRequest
+                        {
+                            ID = existingOrganization.ID,
+                            Domain = simpleFinAccount.Org.Domain,
+                            SimpleFinUrl = simpleFinAccount.Org.SimpleFinUrl,
+                            Name = simpleFinAccount.Org.Name,
+                            Url = simpleFinAccount.Org.Url,
+                        }
+                    );
+                }
+
+                var existingAccount = userData.SimpleFinAccounts.SingleOrDefault(a =>
+                    a.SyncID == simpleFinAccount.Id
+                    && a.Organization?.Domain == simpleFinAccount.Org.Domain
+                );
+                if (existingAccount == null)
+                {
+                    await simpleFinAccountService.CreateSimpleFinAccountAsync(
+                        userData.Id,
+                        new SimpleFinAccountCreateRequest
+                        {
+                            SyncID = simpleFinAccount.Id,
+                            Name = simpleFinAccount.Name,
+                            Currency = simpleFinAccount.Currency,
+                            Balance = decimal.Parse(
+                                simpleFinAccount.Balance,
+                                CultureInfo.InvariantCulture.NumberFormat
+                            ),
+                            BalanceDate = simpleFinAccount.BalanceDate,
+                            OrganizationId = existingOrganization.ID,
+                        }
+                    );
+                }
+                else
+                {
+                    await simpleFinAccountService.UpdateSimpleFinAccountAsync(
+                        userData.Id,
+                        new SimpleFinAccountUpdateRequest
+                        {
+                            ID = existingAccount.ID,
+                            SyncID = simpleFinAccount.Id,
+                            Name = simpleFinAccount.Name,
+                            Currency = simpleFinAccount.Currency,
+                            Balance = decimal.Parse(
+                                simpleFinAccount.Balance,
+                                CultureInfo.InvariantCulture.NumberFormat
+                            ),
+                            BalanceDate = DateTimeOffset
+                                .FromUnixTimeSeconds(simpleFinAccount.BalanceDate)
+                                .UtcDateTime,
+                            LastSync = existingAccount.LastSync,
+                        }
+                    );
                 }
             }
-            else
+            catch (Exception ex)
             {
-                await simpleFinOrganizationService.UpdateSimpleFinOrganizationAsync(
-                    userData.Id,
-                    new SimpleFinOrganizationUpdateRequest
-                    {
-                        ID = existingOrganization.ID,
-                        Domain = simpleFinAccount.Org.Domain,
-                        SimpleFinUrl = simpleFinAccount.Org.SimpleFinUrl,
-                        Name = simpleFinAccount.Org.Name,
-                        Url = simpleFinAccount.Org.Url,
-                    }
+                logger.LogError(
+                    ex,
+                    "{LogMessage}",
+                    logLocalizer[
+                        "SimpleFinAccountSyncExceptionLog",
+                        simpleFinAccount.Name,
+                        ex.Message
+                    ]
                 );
-            }
-
-            var existingAccount = userData.SimpleFinAccounts.SingleOrDefault(a =>
-                a.SyncID == simpleFinAccount.Id
-                && a.Organization?.Domain == simpleFinAccount.Org.Domain
-            );
-            if (existingAccount == null)
-            {
-                await simpleFinAccountService.CreateSimpleFinAccountAsync(
-                    userData.Id,
-                    new SimpleFinAccountCreateRequest
-                    {
-                        SyncID = simpleFinAccount.Id,
-                        Name = simpleFinAccount.Name,
-                        Currency = simpleFinAccount.Currency,
-                        Balance = decimal.Parse(
-                            simpleFinAccount.Balance,
-                            CultureInfo.InvariantCulture.NumberFormat
-                        ),
-                        BalanceDate = simpleFinAccount.BalanceDate,
-                        OrganizationId = existingOrganization.ID,
-                    }
-                );
-            }
-            else
-            {
-                await simpleFinAccountService.UpdateSimpleFinAccountAsync(
-                    userData.Id,
-                    new SimpleFinAccountUpdateRequest
-                    {
-                        ID = existingAccount.ID,
-                        SyncID = simpleFinAccount.Id,
-                        Name = simpleFinAccount.Name,
-                        Currency = simpleFinAccount.Currency,
-                        Balance = decimal.Parse(
-                            simpleFinAccount.Balance,
-                            CultureInfo.InvariantCulture.NumberFormat
-                        ),
-                        BalanceDate = DateTimeOffset
-                            .FromUnixTimeSeconds(simpleFinAccount.BalanceDate)
-                            .UtcDateTime,
-                    }
+                errors.Add(
+                    responseLocalizer["SimpleFinAccountSyncException", simpleFinAccount.Name]
                 );
             }
         }
@@ -533,16 +542,6 @@ public class SimpleFinService(
         IEnumerable<ISimpleFinAccountData> accountsData
     )
     {
-        // Instantiate an autoCategorizer
-        var autoCategorizer =
-            await AutomaticTransactionCategorizerHelper.CreateAutoCategorizerAsync(
-                userDataContext,
-                userData
-            );
-
-        // Retrieve list of categories
-        var allCategories = TransactionCategoriesHelpers.GetAllTransactionCategories(userData);
-
         List<string> errors = [];
         foreach (var accountData in accountsData)
         {
@@ -584,25 +583,35 @@ public class SimpleFinService(
                 continue;
             }
 
-            var transactionErrors = await SyncTransactionsAsync(
-                userData,
-                simpleFinAccount.ID,
-                accountData.Transactions,
-                allCategories,
-                autoCategorizer
-            );
-            errors.AddRange(transactionErrors);
-
-            var balanceSyncErrors = await SyncBalancesAsync(
-                userData,
-                simpleFinAccount.ID,
-                accountData
-            );
-            errors.AddRange(balanceSyncErrors);
-
-            if (transactionErrors.Count == 0 && balanceSyncErrors.Count == 0)
+            try
             {
-                simpleFinAccount.LastSync = nowProvider.UtcNow;
+                var transactionErrors = await SyncTransactionsAsync(
+                    userData,
+                    simpleFinAccount,
+                    accountData.Transactions
+                );
+                errors.AddRange(transactionErrors);
+
+                var balanceSyncErrors = await SyncBalancesAsync(
+                    userData,
+                    simpleFinAccount.ID,
+                    accountData
+                );
+                errors.AddRange(balanceSyncErrors);
+
+                if (transactionErrors.Count == 0 && balanceSyncErrors.Count == 0)
+                {
+                    simpleFinAccount.LastSync = nowProvider.UtcNow;
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(
+                    ex,
+                    "{LogMessage}",
+                    logLocalizer["SimpleFinAccountSyncExceptionLog", accountData.Name, ex.Message]
+                );
+                errors.Add(responseLocalizer["SimpleFinAccountSyncException", accountData.Name]);
             }
         }
 
@@ -611,10 +620,8 @@ public class SimpleFinService(
 
     private async Task<List<string>> SyncTransactionsAsync(
         ApplicationUser userData,
-        Guid simpleFinAccountId,
-        IEnumerable<ISimpleFinTransactionData> transactionsData,
-        IEnumerable<ICategory> allCategories,
-        AutomaticTransactionCategorizerHelper? autoCategorizer
+        SimpleFinAccount simpleFinAccount,
+        IEnumerable<ISimpleFinTransactionData> transactionsData
     )
     {
         List<string> errors = [];
@@ -622,16 +629,19 @@ public class SimpleFinService(
             return errors;
 
         var userAccount = userData.Accounts.FirstOrDefault(a =>
-            a.SimpleFinAccount != null && a.SimpleFinAccount.ID == simpleFinAccountId
+            a.SimpleFinAccount != null && a.SimpleFinAccount.ID == simpleFinAccount.ID
         );
         if (userAccount == null)
         {
             logger.LogError(
                 "{LogMessage}",
-                logLocalizer["SimpleFinAccountNotFoundForTransactionLog", simpleFinAccountId]
+                logLocalizer["SimpleFinAccountNotFoundForTransactionLog", simpleFinAccount.ID]
             );
             errors.Add(
-                responseLocalizer["SimpleFinAccountNotFoundForTransactionError", simpleFinAccountId]
+                responseLocalizer[
+                    "SimpleFinAccountNotFoundForTransactionError",
+                    simpleFinAccount.ID
+                ]
             );
             return errors;
         }
@@ -640,7 +650,17 @@ public class SimpleFinService(
         [
             .. userAccount.Transactions.OrderByDescending(t => t.Date),
         ];
-        foreach (var transactionData in transactionsData)
+
+        // SyncStartDate allows the user to specify a date from which to start syncing transactions.
+        // If it is unset, all transactions will be synced.
+        var transactionsToSync = transactionsData.Where(t =>
+            !simpleFinAccount.SyncStartDate.HasValue
+            || DateOnly.FromDateTime(
+                DateTime.UnixEpoch.AddSeconds(t.Pending ? t.TransactedAt : t.Posted)
+            ) >= simpleFinAccount.SyncStartDate.Value
+        );
+
+        foreach (var transactionData in transactionsToSync)
         {
             if (
                 userTransactions.Any(t =>
@@ -659,20 +679,17 @@ public class SimpleFinService(
             {
                 SyncID = transactionData.Id,
                 Amount = decimal.Parse(transactionData.Amount),
-                Date = transactionData.Pending
-                    ? DateTime.UnixEpoch.AddSeconds(transactionData.TransactedAt)
-                    : DateTime.UnixEpoch.AddSeconds(transactionData.Posted),
+                Date = DateOnly.FromDateTime(
+                    transactionData.Pending
+                        ? DateTime.UnixEpoch.AddSeconds(transactionData.TransactedAt)
+                        : DateTime.UnixEpoch.AddSeconds(transactionData.Posted)
+                ),
                 MerchantName = transactionData.Description,
-                Source = TransactionSource.SimpleFin.Value,
+                Source = TransactionSource.SimpleFIN,
                 AccountID = userAccount.ID,
             };
 
-            await transactionService.CreateTransactionAsync(
-                userData,
-                newTransaction,
-                allCategories,
-                autoCategorizer
-            );
+            await transactionService.CreateTransactionAsync(userData, newTransaction);
         }
 
         return errors;
@@ -698,7 +715,9 @@ public class SimpleFinService(
                     accountData.Balance,
                     CultureInfo.InvariantCulture.NumberFormat
                 ),
-                DateTime = DateTime.UnixEpoch.AddSeconds(accountData.BalanceDate),
+                Date = DateOnly.FromDateTime(
+                    DateTime.UnixEpoch.AddSeconds(accountData.BalanceDate)
+                ),
             },
             balanceService
         );
@@ -713,7 +732,7 @@ public class SimpleFinService(
     private async Task<List<string>> RemoveSimpleFinDataAsync(Guid userGuid)
     {
         List<string> errors = [];
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         foreach (var simpleFinAccount in userData.SimpleFinAccounts.ToList())
         {
@@ -722,10 +741,13 @@ public class SimpleFinService(
             );
             if (linkedAccount != null)
             {
-                await accountService.UpdateAccountSourceAsync(
+                await accountService.UpdateAccountAsync(
                     userData.Id,
-                    linkedAccount.ID,
-                    AccountSource.Manual
+                    new AccountUpdateRequest
+                    {
+                        ID = linkedAccount.ID,
+                        Source = AccountSource.Manual,
+                    }
                 );
             }
 

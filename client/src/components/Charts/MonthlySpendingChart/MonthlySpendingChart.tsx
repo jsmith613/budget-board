@@ -2,14 +2,12 @@ import { ITransaction } from "~/models/transaction";
 import { BarChart } from "@mantine/charts";
 import React from "react";
 import { buildMonthlySpendingChartData } from "~/helpers/charts";
-import { convertNumberToCurrency } from "~/helpers/currency";
+import { convertNumberToCurrency, SignDisplay } from "~/helpers/currency";
 import { Group, Skeleton, Stack } from "@mantine/core";
-import { useQuery } from "@tanstack/react-query";
-import { useAuth } from "~/providers/AuthProvider/AuthProvider";
-import { IUserSettings } from "~/models/userSettings";
-import { AxiosResponse } from "axios";
 import DimmedText from "~/components/core/Text/DimmedText/DimmedText";
 import { useTranslation } from "react-i18next";
+import { useLocale } from "~/providers/LocaleProvider/LocaleProvider";
+import { useUserSettings } from "~/providers/UserSettingsProvider/UserSettingsProvider";
 
 interface SpendingChartProps {
   transactions: ITransaction[];
@@ -22,36 +20,21 @@ interface SpendingChartProps {
 
 const MonthlySpendingChart = (props: SpendingChartProps): React.ReactNode => {
   const sortedMonths = [...props.months].sort(
-    (a, b) => a.getTime() - b.getTime()
+    (a, b) => a.getTime() - b.getTime(),
   );
 
   const { t } = useTranslation();
-  const { request } = useAuth();
-
-  const userSettingsQuery = useQuery({
-    queryKey: ["userSettings"],
-    queryFn: async (): Promise<IUserSettings | undefined> => {
-      const res: AxiosResponse = await request({
-        url: "/api/userSettings",
-        method: "GET",
-      });
-
-      if (res.status === 200) {
-        return res.data as IUserSettings;
-      }
-
-      return undefined;
-    },
-  });
+  const { intlLocale } = useLocale();
+  const { preferredCurrency } = useUserSettings();
 
   const chartData = React.useMemo(
     () =>
       buildMonthlySpendingChartData(
         sortedMonths,
         props.transactions,
-        props.invertData ?? false
+        props.invertData ?? false,
       ),
-    [sortedMonths, props.transactions, props.invertData]
+    [sortedMonths, props.transactions, props.invertData],
   );
 
   const average = React.useMemo(() => {
@@ -103,13 +86,13 @@ const MonthlySpendingChart = (props: SpendingChartProps): React.ReactNode => {
           {props.invertData ? t("average_spending") : t("average_income")}
         </DimmedText>
         <DimmedText size="sm">
-          {userSettingsQuery.isPending
-            ? ""
-            : convertNumberToCurrency(
-                average,
-                false,
-                userSettingsQuery.data?.currency ?? "USD"
-              )}
+          {convertNumberToCurrency(
+            average,
+            false,
+            preferredCurrency,
+            SignDisplay.Auto,
+            intlLocale,
+          )}
         </DimmedText>
       </Group>
       <BarChart
@@ -125,12 +108,14 @@ const MonthlySpendingChart = (props: SpendingChartProps): React.ReactNode => {
         data={chartData}
         dataKey="month"
         valueFormatter={(value) =>
-          userSettingsQuery.isPending
+          value == null
             ? ""
             : convertNumberToCurrency(
                 value,
                 false,
-                userSettingsQuery.data?.currency ?? "USD"
+                preferredCurrency,
+                SignDisplay.Auto,
+                intlLocale,
               )
         }
         referenceLines={[

@@ -1,64 +1,169 @@
-import { Stack } from "@mantine/core";
-import Budgets from "./Budgets/Budgets";
-import Dashboard from "./Dashboard/Dashboard";
-import Goals from "./Goals/Goals";
-import Settings from "./Settings/Settings";
-import Transactions from "./Transactions/Transactions";
-import Trends from "./Trends/Trends";
-import Accounts from "./Accounts/Accounts";
-import Assets from "./Assets/Assets";
-import ExternalAccounts from "./ExternalAccounts/ExternalAccounts";
+import { Alert, ScrollArea, Stack } from "@mantine/core";
+import { Navigate, Route, Routes } from "react-router";
+import { Suspense, lazy } from "react";
+import LoadingScreen from "~/components/LoadingScreen/LoadingScreen";
+import { getProjectEnvVariables } from "~/shared/projectEnvVariables";
+import { useTranslation } from "react-i18next";
+import { TriangleAlert } from "lucide-react";
 
-export enum Pages {
-  Dashboard,
-  Accounts,
-  Assets,
-  Transactions,
-  Budgets,
-  Goals,
-  Trends,
-  ExternalAccounts,
-  Settings,
-}
+const Dashboard = lazy(() => import("./Dashboard/Dashboard"));
+const Accounts = lazy(() => import("./Accounts/Accounts"));
+const Assets = lazy(() => import("./Assets/Assets"));
+const Transactions = lazy(() => import("./Transactions/Transactions"));
+const TransactionsSettings = lazy(
+  () => import("./Transactions/TransactionsSettings/TransactionsSettings"),
+);
+const AccountsSettings = lazy(
+  () => import("./Accounts/AccountsSettings/AccountsSettings"),
+);
+const AccountsSettingsDeleted = lazy(
+  () => import("./Accounts/AccountsSettings/DeletedAccounts/DeletedAccounts"),
+);
+const AccountsSettingsAccountTypes = lazy(
+  () => import("./Accounts/AccountsSettings/AccountTypes/AccountTypes"),
+);
+const AssetsSettings = lazy(
+  () => import("./Assets/AssetsSettings/AssetsSettings"),
+);
+const AssetsSettingsDeleted = lazy(
+  () => import("./Assets/AssetsSettings/DeletedAssets/DeletedAssets"),
+);
+const AssetsSettingsAssetTypes = lazy(
+  () => import("./Assets/AssetsSettings/AssetTypes/AssetTypes"),
+);
+const TransactionsSettingsCategories = lazy(
+  () => import("./Transactions/TransactionsSettings/Categories/Categories"),
+);
+const TransactionsSettingsRules = lazy(
+  () =>
+    import("./Transactions/TransactionsSettings/AutomaticRules/AutomaticRules"),
+);
+const TransactionsSettingsDeleted = lazy(
+  () =>
+    import("./Transactions/TransactionsSettings/DeletedTransactions/DeletedTransactions"),
+);
+const TransactionsSettingsAutoCategorizer = lazy(
+  () =>
+    import("./Transactions/TransactionsSettings/AutoCategorizer/AutoCategorizer"),
+);
+const Budgets = lazy(() => import("./Budgets/Budgets"));
+const BudgetsSettings = lazy(
+  () => import("./Budgets/BudgetsSettings/BudgetsSettings"),
+);
+const Goals = lazy(() => import("./Goals/Goals"));
+const Trends = lazy(() => import("./Trends/Trends"));
+const ExternalAccounts = lazy(
+  () => import("./ExternalAccounts/ExternalAccounts"),
+);
+const Settings = lazy(() => import("./Settings/Settings"));
+const SettingsUser = lazy(() => import("./Settings/SettingsUser/SettingsUser"));
+const SettingsSecurity = lazy(
+  () => import("./Settings/SettingsSecurity/SettingsSecurity"),
+);
+const SettingsAdvanced = lazy(
+  () => import("./Settings/AdvancedSettings/AdvancedSettings"),
+);
 
-interface PageContentProps {
-  currentPage: Pages;
-}
+const PageContent = (): React.ReactNode => {
+  const { t } = useTranslation();
+  const { envVariables } = getProjectEnvVariables();
+  const isDemoMode = envVariables.VITE_DEMO_MODE?.toLowerCase() === "true";
 
-const PageContent = (props: PageContentProps): React.ReactNode => {
-  const getPageContent = (page: Pages): React.ReactNode => {
-    switch (page) {
-      case Pages.Dashboard:
-        return <Dashboard />;
-      case Pages.Accounts:
-        return <Accounts />;
-      case Pages.Assets:
-        return <Assets />;
-      case Pages.Transactions:
-        return <Transactions />;
-      case Pages.Budgets:
-        return <Budgets />;
-      case Pages.Goals:
-        return <Goals />;
-      case Pages.Trends:
-        return <Trends />;
-      case Pages.ExternalAccounts:
-        return <ExternalAccounts />;
-      case Pages.Settings:
-        return <Settings />;
-    }
-  };
+  const suspenseFallback = (
+    <Stack
+      h={"calc(100dvh - var(--app-shell-header-offset, 60px))"}
+      justify="center"
+      align="center"
+    >
+      <LoadingScreen fullScreen={false} />
+    </Stack>
+  );
 
   return (
-    <Stack
-      align="center"
-      justify="flex-start"
+    <ScrollArea
       w="100%"
       h="100%"
-      flex="1 1 auto"
+      type="auto"
+      pb="0.3rem"
+      offsetScrollbars="present"
     >
-      {getPageContent(props.currentPage)}
-    </Stack>
+      <Stack w="100%" p="0.5rem" pb="var(--bulk-bar-height, 0)" align="center">
+        {isDemoMode && (
+          <Alert
+            icon={<TriangleAlert size={16} />}
+            color="yellow"
+            radius="md"
+            w="100%"
+            p="0.5rem"
+            styles={{ message: { fontSize: "var(--mantine-font-size-sm)" } }}
+          >
+            {t("demo_mode_banner")}
+          </Alert>
+        )}
+        <Suspense fallback={suspenseFallback}>
+          <Routes>
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/accounts">
+              <Route index element={<Accounts />} />
+              <Route path="settings" element={<AccountsSettings />}>
+                <Route
+                  index
+                  element={<Navigate to="account-types" replace />}
+                />
+                <Route
+                  path="account-types"
+                  element={<AccountsSettingsAccountTypes />}
+                />
+                <Route path="deleted" element={<AccountsSettingsDeleted />} />
+              </Route>
+            </Route>
+            <Route path="/assets">
+              <Route index element={<Assets />} />
+              <Route path="settings" element={<AssetsSettings />}>
+                <Route index element={<Navigate to="asset-types" replace />} />
+                <Route
+                  path="asset-types"
+                  element={<AssetsSettingsAssetTypes />}
+                />
+                <Route path="deleted" element={<AssetsSettingsDeleted />} />
+              </Route>
+            </Route>
+            <Route path="/transactions">
+              <Route index element={<Transactions />} />
+              <Route path="settings" element={<TransactionsSettings />}>
+                <Route index element={<Navigate to="categories" replace />} />
+                <Route
+                  path="categories"
+                  element={<TransactionsSettingsCategories />}
+                />
+                <Route path="rules" element={<TransactionsSettingsRules />} />
+                <Route
+                  path="deleted"
+                  element={<TransactionsSettingsDeleted />}
+                />
+                <Route
+                  path="auto-categorizer"
+                  element={<TransactionsSettingsAutoCategorizer />}
+                />
+              </Route>
+            </Route>
+            <Route path="/budgets">
+              <Route index element={<Budgets />} />
+              <Route path="settings" element={<BudgetsSettings />} />
+            </Route>
+            <Route path="/goals" element={<Goals />} />
+            <Route path="/trends" element={<Trends />} />
+            <Route path="/external-accounts" element={<ExternalAccounts />} />
+            <Route path="/settings" element={<Settings />}>
+              <Route index element={<Navigate to="user" replace />} />
+              <Route path="user" element={<SettingsUser />} />
+              <Route path="security" element={<SettingsSecurity />} />
+              <Route path="advanced" element={<SettingsAdvanced />} />
+            </Route>
+          </Routes>
+        </Suspense>
+      </Stack>
+    </ScrollArea>
   );
 };
 

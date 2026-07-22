@@ -1,18 +1,15 @@
-import { convertNumberToCurrency } from "~/helpers/currency";
+import { convertNumberToCurrency, SignDisplay } from "~/helpers/currency";
 import { getTransactionsForMonth } from "~/helpers/transactions";
 import { areStringsEqual } from "~/helpers/utils";
 import { CompositeChart, CompositeChartSeries } from "@mantine/charts";
 import { Group, Skeleton } from "@mantine/core";
 import { ITransaction } from "~/models/transaction";
 import React from "react";
-import { useQuery } from "@tanstack/react-query";
-import { useAuth } from "~/providers/AuthProvider/AuthProvider";
-import { IUserSettings } from "~/models/userSettings";
-import { AxiosResponse } from "axios";
 import ChartTooltip from "../ChartTooltip/ChartTooltip";
 import DimmedText from "~/components/core/Text/DimmedText/DimmedText";
 import { useTranslation } from "react-i18next";
-import { useDate } from "~/providers/DateProvider/DateProvider";
+import { useLocale } from "~/providers/LocaleProvider/LocaleProvider";
+import { useUserSettings } from "~/providers/UserSettingsProvider/UserSettingsProvider";
 
 interface ChartDatum {
   month: string;
@@ -31,24 +28,8 @@ interface NetCashFlowChartProps {
 
 const NetCashFlowChart = (props: NetCashFlowChartProps): React.ReactNode => {
   const { t } = useTranslation();
-  const { dayjs } = useDate();
-  const { request } = useAuth();
-
-  const userSettingsQuery = useQuery({
-    queryKey: ["userSettings"],
-    queryFn: async (): Promise<IUserSettings | undefined> => {
-      const res: AxiosResponse = await request({
-        url: "/api/userSettings",
-        method: "GET",
-      });
-
-      if (res.status === 200) {
-        return res.data as IUserSettings;
-      }
-
-      return undefined;
-    },
-  });
+  const { dayjs, intlLocale } = useLocale();
+  const { preferredCurrency } = useUserSettings();
 
   const sortedMonths = props.months.sort(
     (a, b) =>
@@ -97,13 +78,13 @@ const NetCashFlowChart = (props: NetCashFlowChartProps): React.ReactNode => {
   ];
 
   const chartValueFormatter = (value: number): string => {
-    return userSettingsQuery.isPending
-      ? ""
-      : convertNumberToCurrency(
-          value,
-          false,
-          userSettingsQuery.data?.currency ?? "USD",
-        );
+    return convertNumberToCurrency(
+      value,
+      false,
+      preferredCurrency,
+      SignDisplay.Auto,
+      intlLocale,
+    );
   };
 
   if (props.isPending) {

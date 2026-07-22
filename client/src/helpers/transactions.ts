@@ -2,13 +2,12 @@ import { Sorts } from "~/app/Authorized/PageContent/Transactions/TransactionsHea
 import { SortDirection } from "~/components/SortButton";
 import {
   Filters,
-  hiddenTransactionCategory,
   ITransaction,
   uncategorizedTransactionCategory,
 } from "~/models/transaction";
 import { areStringsEqual } from "./utils";
 import { getIsParentCategory } from "./category";
-import { getStandardDate } from "./datetime";
+import dayjs from "~/shared/dayjs";
 import { ICategory } from "~/models/category";
 
 /**
@@ -25,56 +24,56 @@ import { ICategory } from "~/models/category";
 export const sortTransactions = (
   transactions: ITransaction[],
   sortValue: Sorts,
-  sortDirection: SortDirection
+  sortDirection: SortDirection,
 ): ITransaction[] => {
   switch (sortValue) {
     case Sorts.Date:
       return sortDirection === SortDirection.Decending
         ? transactions.sort(
-            (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+            (a, b) => dayjs(b.date).valueOf() - dayjs(a.date).valueOf(),
           )
         : transactions.sort(
-            (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+            (a, b) => dayjs(a.date).valueOf() - dayjs(b.date).valueOf(),
           );
     case Sorts.Merchant:
       return sortDirection === SortDirection.Decending
         ? transactions.sort((a, b) =>
             (b.merchantName ?? "")
               .toLocaleLowerCase()
-              .localeCompare((a.merchantName ?? "").toLocaleLowerCase())
+              .localeCompare((a.merchantName ?? "").toLocaleLowerCase()),
           )
         : transactions.sort((a, b) =>
             (a.merchantName ?? "")
               .toLocaleLowerCase()
-              .localeCompare((b.merchantName ?? "").toLocaleLowerCase())
+              .localeCompare((b.merchantName ?? "").toLocaleLowerCase()),
           );
     case Sorts.Category:
       return sortDirection === SortDirection.Decending
         ? transactions.sort((a, b) =>
             (b.subcategory === null || b.subcategory === ""
-              ? b.category ?? uncategorizedTransactionCategory
-              : b.subcategory ?? uncategorizedTransactionCategory
+              ? (b.category ?? uncategorizedTransactionCategory)
+              : (b.subcategory ?? uncategorizedTransactionCategory)
             )
               .toLocaleLowerCase()
               .localeCompare(
                 (a.subcategory === null || a.subcategory === ""
-                  ? a.category ?? uncategorizedTransactionCategory
-                  : a.subcategory ?? uncategorizedTransactionCategory
-                ).toLocaleLowerCase()
-              )
+                  ? (a.category ?? uncategorizedTransactionCategory)
+                  : (a.subcategory ?? uncategorizedTransactionCategory)
+                ).toLocaleLowerCase(),
+              ),
           )
         : transactions.sort((a, b) =>
             (a.subcategory === null || a.subcategory === ""
-              ? a.category ?? uncategorizedTransactionCategory
-              : a.subcategory ?? uncategorizedTransactionCategory
+              ? (a.category ?? uncategorizedTransactionCategory)
+              : (a.subcategory ?? uncategorizedTransactionCategory)
             )
               .toLocaleLowerCase()
               .localeCompare(
                 (b.subcategory === null || b.subcategory === ""
-                  ? b.category ?? uncategorizedTransactionCategory
-                  : b.subcategory ?? uncategorizedTransactionCategory
-                ).toLocaleLowerCase()
-              )
+                  ? (b.category ?? uncategorizedTransactionCategory)
+                  : (b.subcategory ?? uncategorizedTransactionCategory)
+                ).toLocaleLowerCase(),
+              ),
           );
     case Sorts.Amount:
       return sortDirection === SortDirection.Decending
@@ -96,7 +95,7 @@ export const sortTransactions = (
  */
 export const getTransactionCategory = (
   category: string,
-  subcategory: string
+  subcategory: string,
 ): string => (subcategory && subcategory.length > 0 ? subcategory : category);
 
 /**
@@ -108,61 +107,76 @@ export const getTransactionCategory = (
  * @returns {ITransaction[]} The filtered array of transactions.
  */
 export const getVisibleTransactions = (
-  transactions: ITransaction[]
+  transactions: ITransaction[],
 ): ITransaction[] =>
   transactions.filter((t: ITransaction) => t.deleted === null);
 
 /**
- * Filters transactions based on accounts, categories, and date range.
+ * Filters transactions based on accounts, categories, date range, merchant name, and amount range.
  *
  * The function starts by excluding deleted transactions. It then applies:
  * - Account filters (if any are selected).
  * - Category filters (checks if the category is a parent or subcategory).
  * - Date range filters (if dates are specified).
+ * - Merchant name filter (if specified).
+ * - Amount range filters (if specified).
  *
  * @param {ITransaction[]} transactions - Array of transaction objects.
- * @param {Filters} filters - Object containing account, category, and date range filters.
+ * @param {Filters} filters - Object containing account, category, date range, merchant name, and amount range filters.
  * @param {ICategory[]} transactionCategories - Array of all categories, used to check for parent categories.
  * @returns {ITransaction[]} The filtered array of transactions.
  */
 export const getFilteredTransactions = (
   transactions: ITransaction[],
   filters: Filters,
-  transactionCategories: ICategory[]
+  transactionCategories: ICategory[],
 ): ITransaction[] => {
   // We don't want to include deleted transactions.
   let filteredTransactions = getVisibleTransactions(transactions);
   if (filters.accounts.length > 0) {
     filteredTransactions = filteredTransactions.filter((t) =>
-      filters.accounts.some((f) => areStringsEqual(f, t.accountID))
+      filters.accounts.some((f) => areStringsEqual(f, t.accountID)),
     );
   }
   if (filters.category && filters.category.length > 0) {
     // Uncategorized is a special case since it is not in the categories list.
     const filterCategory = areStringsEqual(
       filters.category,
-      uncategorizedTransactionCategory
+      uncategorizedTransactionCategory,
     )
       ? ""
       : filters.category;
     filteredTransactions = filteredTransactions.filter((t) =>
       getIsParentCategory(filters.category, transactionCategories)
         ? areStringsEqual(t.category ?? "", filterCategory)
-        : areStringsEqual(t.subcategory ?? "", filterCategory)
+        : areStringsEqual(t.subcategory ?? "", filterCategory),
     );
   }
   if (filters.dateRange?.at(0)) {
-    filteredTransactions = filteredTransactions.filter(
-      (t) =>
-        getStandardDate(t.date).getTime() >=
-        getStandardDate(filters.dateRange.at(0)!).getTime()
+    filteredTransactions = filteredTransactions.filter((t) =>
+      dayjs(t.date).isSameOrAfter(dayjs(filters.dateRange.at(0)!), "day"),
     );
   }
   if (filters.dateRange?.at(1)) {
+    filteredTransactions = filteredTransactions.filter((t) =>
+      dayjs(t.date).isSameOrBefore(dayjs(filters.dateRange.at(1)!), "day"),
+    );
+  }
+  if (filters.merchantName && filters.merchantName.length > 0) {
+    filteredTransactions = filteredTransactions.filter((t) =>
+      (t.merchantName ?? "")
+        .toLowerCase()
+        .includes(filters.merchantName.toLowerCase()),
+    );
+  }
+  if (filters.amountRange[0] !== null) {
     filteredTransactions = filteredTransactions.filter(
-      (t) =>
-        getStandardDate(t.date).getTime() <=
-        getStandardDate(filters.dateRange.at(1)!).getTime()
+      (t) => t.amount >= filters.amountRange[0]!,
+    );
+  }
+  if (filters.amountRange[1] !== null) {
+    filteredTransactions = filteredTransactions.filter(
+      (t) => t.amount <= filters.amountRange[1]!,
     );
   }
   return filteredTransactions;
@@ -178,7 +192,7 @@ export const getFilteredTransactions = (
  * @returns {ITransaction[]} An array containing the deleted transactions.
  */
 export const getDeletedTransactions = (
-  transactions: ITransaction[]
+  transactions: ITransaction[],
 ): ITransaction[] =>
   transactions.filter((t: ITransaction) => t.deleted !== null);
 
@@ -195,30 +209,17 @@ export const getDeletedTransactions = (
  */
 export const buildTimeToMonthlyTotalsMap = (
   months: Date[],
-  transactions: ITransaction[]
+  transactions: ITransaction[],
 ): Map<number, number> => {
   const map = new Map<number, number>();
   months.forEach((month: Date) => {
     const total = transactions
-      .filter((t) => new Date(t.date).getMonth() === month.getMonth())
+      .filter((t) => dayjs(t.date).isSame(month, "month"))
       .reduce((n, { amount }) => n + amount, 0);
     map.set(month.getTime(), total);
   });
   return map;
 };
-
-/**
- * Filters out transactions with the hiddenTransactionCategory.
- *
- * The function filters the transactions array, excluding those with the hiddenTransactionCategory.
- *
- * @param {ITransaction[]} transactions - Array of transaction objects.
- * @returns {ITransaction[]} The filtered array of transactions.
- */
-export const filterHiddenTransactions = (transactions: ITransaction[]) =>
-  getVisibleTransactions(transactions).filter(
-    (t) => !areStringsEqual(t.category ?? "", hiddenTransactionCategory)
-  );
 
 /**
  * Retrieves transactions for a specific month and year based on the provided date.
@@ -232,12 +233,10 @@ export const filterHiddenTransactions = (transactions: ITransaction[]) =>
  */
 export const getTransactionsForMonth = (
   transactionData: ITransaction[],
-  date: Date
+  date: Date,
 ): ITransaction[] =>
-  transactionData.filter(
-    (t: ITransaction) =>
-      new Date(t.date).getMonth() === new Date(date).getMonth() &&
-      new Date(t.date).getUTCFullYear() === new Date(date).getUTCFullYear()
+  transactionData.filter((t: ITransaction) =>
+    dayjs(t.date).isSame(date, "month"),
   );
 
 export interface RollingTotalSpendingPerDay {
@@ -256,19 +255,19 @@ export interface RollingTotalSpendingPerDay {
  */
 export const getRollingTotalSpendingForMonth = (
   transactionsForMonth: ITransaction[],
-  endDate: number
+  endDate: number,
 ): RollingTotalSpendingPerDay[] => {
   const rollingTotalSpendingPerDay: RollingTotalSpendingPerDay[] = [];
 
   const sortedSpending = transactionsForMonth
     .filter((t) => !areStringsEqual(t.category ?? "", "Income"))
-    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    .sort((a, b) => dayjs(a.date).valueOf() - dayjs(b.date).valueOf());
 
   let total = 0;
   const summedTransactionsPerMonth = sortedSpending.reduce(
     (result: RollingTotalSpendingPerDay[], transaction: ITransaction) => {
       const foundDay = result.find(
-        (t) => t.day === new Date(transaction.date).getDate()
+        (t) => t.day === dayjs(transaction.date).date(),
       );
 
       // Transactions are negative and we want spending to be positive,
@@ -277,7 +276,7 @@ export const getRollingTotalSpendingForMonth = (
 
       if (foundDay == null) {
         const newDay: RollingTotalSpendingPerDay = {
-          day: new Date(transaction.date).getDate(),
+          day: dayjs(transaction.date).date(),
           amount: total,
         };
         result.push(newDay);
@@ -286,7 +285,7 @@ export const getRollingTotalSpendingForMonth = (
       }
       return result;
     },
-    []
+    [],
   );
 
   // If it is the current month, we need to continue the rolling total
@@ -322,10 +321,10 @@ export const getRollingTotalSpendingForMonth = (
  */
 export const getTransactionsByCategory = (
   transactions: ITransaction[],
-  categoryValue: string
+  categoryValue: string,
 ) =>
   transactions.filter((t: ITransaction) =>
-    areStringsEqual(t.category ?? "", categoryValue)
+    areStringsEqual(t.category ?? "", categoryValue),
   );
 
 /**
@@ -335,18 +334,18 @@ export const getTransactionsByCategory = (
  * @returns {Map<string, number>} A map with categories/subcategories as keys and summed transaction amounts as values
  */
 export const buildCategoryToTransactionsTotalMap = (
-  transactions: ITransaction[]
+  transactions: ITransaction[],
 ): Map<string, number> => {
   const categoryToTransactionsTotalMap = new Map<string, number>();
   transactions.forEach((transaction) => {
     const currentTotalCategory =
       categoryToTransactionsTotalMap.get(
-        (transaction.category ?? "").toLocaleLowerCase()
+        (transaction.category ?? "").toLocaleLowerCase(),
       ) ?? 0;
 
     categoryToTransactionsTotalMap.set(
       (transaction.category ?? "").toLocaleLowerCase(),
-      currentTotalCategory + transaction.amount
+      currentTotalCategory + transaction.amount,
     );
 
     if (
@@ -357,11 +356,11 @@ export const buildCategoryToTransactionsTotalMap = (
     ) {
       const currentTotalSubCategory =
         categoryToTransactionsTotalMap.get(
-          transaction.subcategory.toLocaleLowerCase()
+          transaction.subcategory.toLocaleLowerCase(),
         ) ?? 0;
       categoryToTransactionsTotalMap.set(
         transaction.subcategory.toLocaleLowerCase(),
-        currentTotalSubCategory + transaction.amount
+        currentTotalSubCategory + transaction.amount,
       );
     }
   });
@@ -375,7 +374,7 @@ export const buildCategoryToTransactionsTotalMap = (
  * @returns {number} The total sum of all amounts
  */
 export const sumTransactionAmounts = (
-  transactionData: ITransaction[]
+  transactionData: ITransaction[],
 ): number => {
   return transactionData.reduce((n, { amount }) => n + amount, 0);
 };

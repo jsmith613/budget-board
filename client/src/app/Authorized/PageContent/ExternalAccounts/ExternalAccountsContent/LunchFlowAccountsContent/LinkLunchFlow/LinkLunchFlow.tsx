@@ -1,10 +1,10 @@
-import { Button, LoadingOverlay, Stack, Skeleton } from "@mantine/core";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Button, LoadingOverlay, Stack } from "@mantine/core";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import React from "react";
 import { useAuth } from "~/providers/AuthProvider/AuthProvider";
-import { IApplicationUser } from "~/models/applicationUser";
-import { AxiosError, AxiosResponse } from "axios";
+import { AxiosError } from "axios";
 import {
+  applicationUserQueryKey,
   lunchFlowAccountQueryKey,
   translateAxiosError,
 } from "~/helpers/requests";
@@ -18,28 +18,11 @@ import TextInput from "~/components/core/Input/TextInput/TextInput";
 
 const LinkLunchFlow = (): React.ReactNode => {
   const { t } = useTranslation();
+  const { request } = useAuth();
 
   const lunchFlowKeyField = useField<string>({
     initialValue: "",
     validate: isNotEmpty(t("lunchflow_key_is_required")),
-  });
-
-  const { request } = useAuth();
-
-  const userQuery = useQuery({
-    queryKey: ["user"],
-    queryFn: async (): Promise<IApplicationUser | undefined> => {
-      const res: AxiosResponse = await request({
-        url: "/api/applicationUser",
-        method: "GET",
-      });
-
-      if (res.status === 200) {
-        return res.data as IApplicationUser;
-      }
-
-      return undefined;
-    },
   });
 
   const queryClient = useQueryClient();
@@ -51,7 +34,9 @@ const LinkLunchFlow = (): React.ReactNode => {
         params: { apiKey },
       }),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["user"] });
+      await queryClient.invalidateQueries({
+        queryKey: [applicationUserQueryKey],
+      });
       await queryClient.invalidateQueries({
         queryKey: [lunchFlowAccountQueryKey],
       });
@@ -63,10 +48,6 @@ const LinkLunchFlow = (): React.ReactNode => {
       });
     },
   });
-
-  if (userQuery.isLoading) {
-    return <Skeleton height={150} radius="md" />;
-  }
 
   return (
     <Card elevation={1}>

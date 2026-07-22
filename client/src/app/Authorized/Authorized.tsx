@@ -6,20 +6,16 @@ import {
 } from "@mantine/core";
 import Navbar from "./Navbar/Navbar";
 import React from "react";
-import PageContent, { Pages } from "./PageContent/PageContent";
+import PageContent from "./PageContent/PageContent";
 import Header from "./Header/Header";
 import { useDisclosure } from "@mantine/hooks";
 import { TransactionFiltersProvider } from "~/providers/TransactionFiltersProvider/TransactionFiltersProvider";
 import { TransactionCategoryProvider } from "~/providers/TransactionCategoryProvider/TransactionCategoryProvider";
+import { AccountTypeProvider } from "~/providers/AccountTypeProvider/AccountTypeProvider";
+import { AssetTypeProvider } from "~/providers/AssetTypeProvider/AssetTypeProvider";
 
 const Authorized = (): React.ReactNode => {
-  const [currentPage, setCurrentPage] = React.useState(Pages.Dashboard);
-  const [isNavbarOpen, { toggle }] = useDisclosure();
-
-  const onPageSelect = (page: Pages): void => {
-    setCurrentPage(page);
-    toggle();
-  };
+  const [isNavbarOpen, { toggle, close }] = useDisclosure();
 
   return (
     <AppShell
@@ -33,28 +29,39 @@ const Authorized = (): React.ReactNode => {
       header={{
         height: 60,
       }}
-      padding={12}
+      bg="var(--background-color-base)"
+      p={0}
     >
-      <AppShellHeader bg="var(--background-color-header)">
+      <AppShellHeader
+        bg="var(--background-color-header)"
+        style={{ borderWidth: "2px" }}
+      >
         <Header isNavbarOpen={isNavbarOpen} toggleNavbar={toggle} />
       </AppShellHeader>
-      <AppShellNavbar bg="var(--background-color-sidebar)">
+      <AppShellNavbar
+        bg="var(--background-color-sidebar)"
+        style={{ borderWidth: "2px" }}
+      >
         <Navbar
-          currentPage={currentPage}
-          setCurrentPage={onPageSelect}
           isNavbarOpen={isNavbarOpen}
           toggleNavbar={toggle}
+          closeNavbar={close}
         />
       </AppShellNavbar>
       <AppShellMain
         bg="var(--background-color-base)"
+        h="100dvh"
         flex={{ direction: "column" }}
       >
-        <TransactionCategoryProvider>
-          <TransactionFiltersProvider setCurrentPage={setCurrentPage}>
-            <PageContent currentPage={currentPage} />
-          </TransactionFiltersProvider>
-        </TransactionCategoryProvider>
+        <AccountTypeProvider>
+          <AssetTypeProvider>
+            <TransactionCategoryProvider>
+              <TransactionFiltersProvider>
+                <PageContent />
+              </TransactionFiltersProvider>
+            </TransactionCategoryProvider>
+          </AssetTypeProvider>
+        </AccountTypeProvider>
       </AppShellMain>
     </AppShell>
   );

@@ -17,7 +17,7 @@ namespace BudgetBoard.Database.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.1")
+                .HasAnnotation("ProductVersion", "10.0.9")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -55,10 +55,10 @@ namespace BudgetBoard.Database.Migrations
                     b.Property<int>("Index")
                         .HasColumnType("integer");
 
-                    b.Property<Guid?>("InstitutionID")
+                    b.Property<Guid>("InstitutionID")
                         .HasColumnType("uuid");
 
-                    b.Property<decimal?>("InterestRate")
+                    b.Property<decimal>("InterestRate")
                         .HasColumnType("numeric");
 
                     b.Property<string>("Name")
@@ -66,10 +66,6 @@ namespace BudgetBoard.Database.Migrations
                         .HasColumnType("text");
 
                     b.Property<string>("Source")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Subtype")
                         .IsRequired()
                         .HasColumnType("text");
 
@@ -87,6 +83,34 @@ namespace BudgetBoard.Database.Migrations
                     b.HasIndex("UserID");
 
                     b.ToTable("Account", (string)null);
+                });
+
+            modelBuilder.Entity("BudgetBoard.Database.Models.AccountType", b =>
+                {
+                    b.Property<Guid>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Classification")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Parent")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("UserID")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("UserID");
+
+                    b.ToTable("AccountType", (string)null);
                 });
 
             modelBuilder.Entity("BudgetBoard.Database.Models.ApplicationUser", b =>
@@ -184,17 +208,21 @@ namespace BudgetBoard.Database.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<DateTime?>("PurchaseDate")
-                        .HasColumnType("timestamp with time zone");
+                    b.Property<DateOnly?>("PurchaseDate")
+                        .HasColumnType("date");
 
                     b.Property<decimal?>("PurchasePrice")
                         .HasColumnType("numeric");
 
-                    b.Property<DateTime?>("SellDate")
-                        .HasColumnType("timestamp with time zone");
+                    b.Property<DateOnly?>("SellDate")
+                        .HasColumnType("date");
 
                     b.Property<decimal?>("SellPrice")
                         .HasColumnType("numeric");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.Property<Guid>("UserID")
                         .HasColumnType("uuid");
@@ -204,6 +232,30 @@ namespace BudgetBoard.Database.Migrations
                     b.HasIndex("UserID");
 
                     b.ToTable("Asset", (string)null);
+                });
+
+            modelBuilder.Entity("BudgetBoard.Database.Models.AssetType", b =>
+                {
+                    b.Property<Guid>("ID")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Parent")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("UserID")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("ID");
+
+                    b.HasIndex("UserID");
+
+                    b.ToTable("AssetType", (string)null);
                 });
 
             modelBuilder.Entity("BudgetBoard.Database.Models.AutomaticRule", b =>
@@ -234,11 +286,8 @@ namespace BudgetBoard.Database.Migrations
                     b.Property<decimal>("Amount")
                         .HasColumnType("numeric");
 
-                    b.Property<DateTime>("DateTime")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("Deleted")
-                        .HasColumnType("timestamp with time zone");
+                    b.Property<DateOnly>("Date")
+                        .HasColumnType("date");
 
                     b.HasKey("ID");
 
@@ -257,11 +306,11 @@ namespace BudgetBoard.Database.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<DateTime>("Date")
-                        .HasColumnType("timestamp with time zone");
-
                     b.Property<decimal>("Limit")
                         .HasColumnType("numeric");
+
+                    b.Property<DateOnly>("Month")
+                        .HasColumnType("date");
 
                     b.Property<Guid>("UserID")
                         .HasColumnType("uuid");
@@ -278,6 +327,10 @@ namespace BudgetBoard.Database.Migrations
                     b.Property<Guid>("ID")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
+
+                    b.Property<string>("CategoryType")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.Property<string>("Parent")
                         .IsRequired()
@@ -306,11 +359,11 @@ namespace BudgetBoard.Database.Migrations
                     b.Property<decimal>("Amount")
                         .HasColumnType("numeric");
 
-                    b.Property<DateTime?>("CompleteDate")
-                        .HasColumnType("timestamp with time zone");
+                    b.Property<DateOnly?>("CompleteDate")
+                        .HasColumnType("date");
 
-                    b.Property<DateTime?>("Completed")
-                        .HasColumnType("timestamp with time zone");
+                    b.Property<DateOnly?>("Completed")
+                        .HasColumnType("date");
 
                     b.Property<decimal>("InitialAmount")
                         .HasColumnType("numeric");
@@ -404,6 +457,9 @@ namespace BudgetBoard.Database.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<DateOnly?>("SyncStartDate")
+                        .HasColumnType("date");
+
                     b.Property<Guid>("UserID")
                         .HasColumnType("uuid");
 
@@ -485,6 +541,9 @@ namespace BudgetBoard.Database.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<DateOnly?>("SyncStartDate")
+                        .HasColumnType("date");
+
                     b.Property<Guid>("UserID")
                         .HasColumnType("uuid");
 
@@ -547,8 +606,8 @@ namespace BudgetBoard.Database.Migrations
                     b.Property<string>("Category")
                         .HasColumnType("text");
 
-                    b.Property<DateTime>("Date")
-                        .HasColumnType("timestamp with time zone");
+                    b.Property<DateOnly>("Date")
+                        .HasColumnType("date");
 
                     b.Property<DateTime?>("Deleted")
                         .HasColumnType("timestamp with time zone");
@@ -605,6 +664,12 @@ namespace BudgetBoard.Database.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<bool>("DisableBuiltInAccountTypes")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("DisableBuiltInAssetTypes")
+                        .HasColumnType("boolean");
+
                     b.Property<bool>("DisableBuiltInTransactionCategories")
                         .HasColumnType("boolean");
 
@@ -641,11 +706,8 @@ namespace BudgetBoard.Database.Migrations
                     b.Property<Guid>("AssetID")
                         .HasColumnType("uuid");
 
-                    b.Property<DateTime>("DateTime")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("Deleted")
-                        .HasColumnType("timestamp with time zone");
+                    b.Property<DateOnly>("Date")
+                        .HasColumnType("date");
 
                     b.HasKey("ID");
 
@@ -663,8 +725,23 @@ namespace BudgetBoard.Database.Migrations
                     b.Property<string>("Configuration")
                         .HasColumnType("jsonb");
 
-                    b.Property<bool>("IsVisible")
-                        .HasColumnType("boolean");
+                    b.Property<int>("LgH")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("LgW")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("LgX")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("LgY")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("SmH")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("SmY")
+                        .HasColumnType("integer");
 
                     b.Property<Guid>("UserID")
                         .HasColumnType("uuid");
@@ -847,7 +924,9 @@ namespace BudgetBoard.Database.Migrations
                 {
                     b.HasOne("BudgetBoard.Database.Models.Institution", "Institution")
                         .WithMany("Accounts")
-                        .HasForeignKey("InstitutionID");
+                        .HasForeignKey("InstitutionID")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
 
                     b.HasOne("BudgetBoard.Database.Models.ApplicationUser", "User")
                         .WithMany("Accounts")
@@ -860,10 +939,32 @@ namespace BudgetBoard.Database.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("BudgetBoard.Database.Models.AccountType", b =>
+                {
+                    b.HasOne("BudgetBoard.Database.Models.ApplicationUser", "User")
+                        .WithMany("AccountTypes")
+                        .HasForeignKey("UserID")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
+                });
+
             modelBuilder.Entity("BudgetBoard.Database.Models.Asset", b =>
                 {
                     b.HasOne("BudgetBoard.Database.Models.ApplicationUser", "User")
                         .WithMany("Assets")
+                        .HasForeignKey("UserID")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("BudgetBoard.Database.Models.AssetType", b =>
+                {
+                    b.HasOne("BudgetBoard.Database.Models.ApplicationUser", "User")
+                        .WithMany("AssetTypes")
                         .HasForeignKey("UserID")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
@@ -1118,7 +1219,11 @@ namespace BudgetBoard.Database.Migrations
 
             modelBuilder.Entity("BudgetBoard.Database.Models.ApplicationUser", b =>
                 {
+                    b.Navigation("AccountTypes");
+
                     b.Navigation("Accounts");
+
+                    b.Navigation("AssetTypes");
 
                     b.Navigation("Assets");
 

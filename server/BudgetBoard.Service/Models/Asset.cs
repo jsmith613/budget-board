@@ -17,12 +17,14 @@ public interface IAssetResponse
     Guid ID { get; }
     string Name { get; }
     decimal? CurrentValue { get; }
-    DateTime? PurchaseDate { get; }
+    DateOnly? ValueDate { get; }
+    DateOnly? PurchaseDate { get; }
     decimal? PurchasePrice { get; }
-    DateTime? SellDate { get; }
+    DateOnly? SellDate { get; }
     decimal? SellPrice { get; }
     bool Hide { get; }
     DateTime? Deleted { get; }
+    string? Type { get; }
     int Index { get; }
     Guid UserID { get; }
 }
@@ -32,13 +34,14 @@ public class AssetResponse() : IAssetResponse
     public Guid ID { get; set; } = Guid.Empty;
     public string Name { get; set; } = string.Empty;
     public decimal? CurrentValue { get; set; } = null;
-    public DateTime? ValueDate { get; set; } = null;
-    public DateTime? PurchaseDate { get; set; } = null;
+    public DateOnly? ValueDate { get; set; } = null;
+    public DateOnly? PurchaseDate { get; set; } = null;
     public decimal? PurchasePrice { get; set; } = null;
-    public DateTime? SellDate { get; set; } = null;
+    public DateOnly? SellDate { get; set; } = null;
     public decimal? SellPrice { get; set; } = null;
     public bool Hide { get; set; } = false;
     public DateTime? Deleted { get; set; } = null;
+    public string? Type { get; set; } = null;
     public int Index { get; set; } = 0;
     public Guid UserID { get; set; } = Guid.Empty;
 
@@ -47,22 +50,15 @@ public class AssetResponse() : IAssetResponse
     {
         ID = asset.ID;
         Name = asset.Name;
-        CurrentValue = asset
-            .Values.OrderByDescending(v => v.DateTime)
-            .Where(v => v.Deleted == null)
-            .FirstOrDefault()
-            ?.Amount;
-        ValueDate = asset
-            .Values.OrderByDescending(v => v.DateTime)
-            .Where(v => v.Deleted == null)
-            .FirstOrDefault()
-            ?.DateTime;
+        CurrentValue = asset.Values.OrderByDescending(v => v.Date).FirstOrDefault()?.Amount;
+        ValueDate = asset.Values.OrderByDescending(v => v.Date).FirstOrDefault()?.Date;
         PurchaseDate = asset.PurchaseDate;
         PurchasePrice = asset.PurchasePrice;
         SellDate = asset.SellDate;
         SellPrice = asset.SellPrice;
         Hide = asset.Hide;
         Deleted = asset.Deleted;
+        Type = asset.Type;
         Index = asset.Index;
         UserID = asset.UserID;
     }
@@ -71,23 +67,25 @@ public class AssetResponse() : IAssetResponse
 public interface IAssetUpdateRequest
 {
     Guid ID { get; }
-    string Name { get; }
-    DateTime? PurchaseDate { get; }
-    decimal? PurchasePrice { get; }
-    DateTime? SellDate { get; }
-    decimal? SellPrice { get; }
-    bool Hide { get; }
+    OptionalField<string> Name { get; }
+    OptionalField<DateOnly?> PurchaseDate { get; }
+    OptionalField<decimal?> PurchasePrice { get; }
+    OptionalField<DateOnly?> SellDate { get; }
+    OptionalField<decimal?> SellPrice { get; }
+    OptionalField<bool> Hide { get; }
+    OptionalField<string> Type { get; }
 }
 
 public class AssetUpdateRequest() : IAssetUpdateRequest
 {
     public Guid ID { get; set; } = Guid.Empty;
-    public string Name { get; set; } = string.Empty;
-    public DateTime? PurchaseDate { get; set; } = null;
-    public decimal? PurchasePrice { get; set; } = null;
-    public DateTime? SellDate { get; set; } = null;
-    public decimal? SellPrice { get; set; } = null;
-    public bool Hide { get; set; } = false;
+    public OptionalField<string> Name { get; set; }
+    public OptionalField<DateOnly?> PurchaseDate { get; set; }
+    public OptionalField<decimal?> PurchasePrice { get; set; }
+    public OptionalField<DateOnly?> SellDate { get; set; }
+    public OptionalField<decimal?> SellPrice { get; set; }
+    public OptionalField<bool> Hide { get; set; }
+    public OptionalField<string> Type { get; set; }
 }
 
 public interface IAssetIndexRequest
@@ -100,11 +98,4 @@ public class AssetIndexRequest() : IAssetIndexRequest
 {
     public Guid ID { get; set; } = Guid.Empty;
     public int Index { get; set; } = 0;
-
-    public AssetIndexRequest(Asset asset)
-        : this()
-    {
-        ID = asset.ID;
-        Index = asset.Index;
-    }
 }

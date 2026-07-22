@@ -9,16 +9,15 @@ import {
   LoadingOverlay,
   Stack,
 } from "@mantine/core";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AxiosError, AxiosResponse } from "axios";
 import React from "react";
-import { useAuth } from "~/providers/AuthProvider/AuthProvider";
 import { sumAccountsTotalBalance } from "~/helpers/accounts";
-import { convertNumberToCurrency, getCurrencySymbol } from "~/helpers/currency";
-import { IGoalResponse, IGoalUpdateRequest } from "~/models/goal";
-import { IUserSettings } from "~/models/userSettings";
+import {
+  convertNumberToCurrency,
+  getCurrencySymbol,
+  SignDisplay,
+} from "~/helpers/currency";
+import { IGoalResponse } from "~/models/goal";
 import { notifications } from "@mantine/notifications";
-import { translateAxiosError } from "~/helpers/requests";
 import { PencilIcon, TrashIcon } from "lucide-react";
 import { useField } from "@mantine/form";
 import { DateValue } from "@mantine/dates";
@@ -33,7 +32,11 @@ import DateInput from "~/components/core/Input/DateInput/DateInput";
 import Progress from "~/components/core/Progress/Progress";
 import { ProgressType } from "~/components/core/Progress/ProgressBase/ProgressBase";
 import { Trans, useTranslation } from "react-i18next";
-import { useDate } from "~/providers/DateProvider/DateProvider";
+import { useLocale } from "~/providers/LocaleProvider/LocaleProvider";
+import { useCompleteGoalMutation } from "~/hooks/mutations/goals/useCompleteGoalMutation";
+import { useUpdateGoalMutation } from "~/hooks/mutations/goals/useUpdateGoalMutation";
+import { useDeleteGoalMutation } from "~/hooks/mutations/goals/useDeleteGoalMutation";
+import { useUserSettings } from "~/providers/UserSettingsProvider/UserSettingsProvider";
 
 interface GoalCardContentProps {
   goal: IGoalResponse;
@@ -45,8 +48,18 @@ const EditableGoalCardContent = (
   props: GoalCardContentProps,
 ): React.ReactNode => {
   const { t } = useTranslation();
-  const { dayjs, locale, longDateFormat } = useDate();
-  const { request } = useAuth();
+  const {
+    dayjs,
+    dayjsLocale,
+    intlLocale,
+    longDateFormat,
+    thousandsSeparator,
+    decimalSeparator,
+  } = useLocale();
+  const { preferredCurrency } = useUserSettings();
+  const updateGoalMutation = useUpdateGoalMutation();
+  const deleteGoalMutation = useDeleteGoalMutation();
+  const completeGoalMutation = useCompleteGoalMutation();
 
   const goalNameField = useField<string>({
     initialValue: props.goal.name,
@@ -63,185 +76,13 @@ const EditableGoalCardContent = (
       : null,
   });
 
-  const userSettingsQuery = useQuery({
-    queryKey: ["userSettings"],
-    queryFn: async (): Promise<IUserSettings | undefined> => {
-      const res: AxiosResponse = await request({
-        url: "/api/userSettings",
-        method: "GET",
-      });
-
-      if (res.status === 200) {
-        return res.data as IUserSettings;
-      }
-
-      return undefined;
-    },
-  });
-
-  const queryClient = useQueryClient();
-  const doEditGoal = useMutation({
-    mutationFn: async (newGoal: IGoalUpdateRequest) =>
-      await request({
-        url: "/api/goal",
-        method: "PUT",
-        data: newGoal,
-      }),
-    onMutate: async (variables: IGoalUpdateRequest) => {
-      await queryClient.cancelQueries({
-        queryKey: ["goals", { includeInterest: props.includeInterest }],
-      });
-
-      const previousGoals: IGoalResponse[] =
-        queryClient.getQueryData([
-          "goals",
-          { includeInterest: props.includeInterest },
-        ]) ?? [];
-
-      queryClient.setQueryData(
-        ["goals", { includeInterest: props.includeInterest }],
-        (oldGoals: IGoalResponse[]) =>
-          oldGoals?.map((oldGoal: IGoalResponse) =>
-            oldGoal.id === variables.id
-              ? {
-                  ...oldGoal,
-                  name: variables.name,
-                  completeDate: variables.completeDate,
-                  amount: variables.amount,
-                  monthlyContribution: variables.monthlyContribution,
-                }
-              : oldGoal,
-          ),
-      );
-
-      return { previousGoals };
-    },
-    onError: (error: AxiosError, _variables: IGoalUpdateRequest, context) => {
-      queryClient.setQueryData(
-        ["goals", { includeInterest: props.includeInterest }],
-        context?.previousGoals ?? [],
-      );
-      notifications.show({
-        color: "var(--button-color-destructive)",
-        message: translateAxiosError(error),
-      });
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["goals", { includeInterest: props.includeInterest }],
-      });
-    },
-  });
-
-  const doCompleteGoal = useMutation({
-    mutationFn: async (id: string) =>
-      await request({
-        url: "/api/goal/complete",
-        method: "POST",
-        params: { goalID: id },
-      }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: ["goals"],
-      });
-      notifications.show({
-        color: "var(--button-color-confirm)",
-        message: t("goal_successfully_marked_complete"),
-      });
-    },
-    onError: (error: AxiosError) => {
-      notifications.show({
-        color: "var(--button-color-destructive)",
-        message: translateAxiosError(error),
-      });
-    },
-  });
-
-  const doDeleteGoal = useMutation({
-    mutationFn: async (id: string) =>
-      await request({
-        url: "/api/goal",
-        method: "DELETE",
-        params: { guid: id },
-      }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: ["goals"],
-      });
-      notifications.show({
-        color: "var(--button-color-confirm)",
-        message: t("goal_deleted_successfully"),
-      });
-    },
-    onError: (error: AxiosError) => {
-      notifications.show({
-        color: "var(--button-color-destructive)",
-        message: translateAxiosError(error),
-      });
-    },
-  });
-
-  const submitChanges = (): void => {
-    const newGoal: IGoalUpdateRequest = { ...props.goal };
-
-    if (goalNameField.getValue().length > 0) {
-      newGoal.name = goalNameField.getValue();
-    } else {
-      notifications.show({
-        color: "var(--button-color-destructive)",
-        message: t("invalid_goal_name"),
-      });
-    }
-
-    if (goalTargetAmountField.getValue() > 0) {
-      newGoal.amount = goalTargetAmountField.getValue();
-    } else {
-      notifications.show({
-        color: "var(--button-color-destructive)",
-        message: t("invalid_target_amount"),
-      });
-    }
-
-    if (goalMonthlyContributionField.getValue() > 0) {
-      newGoal.monthlyContribution = goalMonthlyContributionField.getValue();
-    } else {
-      notifications.show({
-        color: "var(--button-color-destructive)",
-        message: t("invalid_monthly_contribution"),
-      });
-    }
-
-    doEditGoal.mutate(newGoal);
-  };
-
-  // The DateInput doesn't have an onBlur property, so we need to handle this manually.
-  const submitTargetDateChanges = (date: DateValue): void => {
-    const parsedDate = dayjs(date);
-
-    if (parsedDate.isValid()) {
-      goalTargetDateField.setValue(parsedDate.toDate());
-    } else {
-      notifications.show({
-        color: "var(--button-color-destructive)",
-        message: t("invalid_target_date"),
-      });
-    }
-
-    const newGoal: IGoalUpdateRequest = {
-      ...props.goal,
-      completeDate: parsedDate.toDate(),
-    };
-
-    doEditGoal.mutate(newGoal);
-  };
-
   return (
     <>
       <LoadingOverlay
         visible={
-          doEditGoal.isPending ||
-          doDeleteGoal.isPending ||
-          doCompleteGoal.isPending
+          updateGoalMutation.isPending ||
+          deleteGoalMutation.isPending ||
+          completeGoalMutation.isPending
         }
       />
       <Group style={{ containerType: "inline-size" }} wrap="nowrap">
@@ -250,17 +91,30 @@ const EditableGoalCardContent = (
             <Group align="center" gap={10}>
               <TextInput
                 {...goalNameField.getInputProps()}
-                onBlur={submitChanges}
+                onBlur={(event) => {
+                  if (event.currentTarget.value.length > 0) {
+                    goalNameField.setValue(event.currentTarget.value);
+                    updateGoalMutation.mutate({
+                      id: props.goal.id,
+                      name: event.currentTarget.value,
+                    });
+                  } else {
+                    notifications.show({
+                      color: "var(--button-color-destructive)",
+                      message: t("invalid_goal_name"),
+                    });
+                  }
+                }}
                 onClick={(e) => e.stopPropagation()}
                 elevation={1}
               />
               {props.includeInterest && props.goal.interestRate && (
                 <Badge variant="light">
                   {t("interest_rate_apr", {
-                    rate: props.goal.interestRate.toLocaleString(undefined, {
+                    rate: new Intl.NumberFormat(intlLocale, {
                       style: "percent",
-                      minimumFractionDigits: 2,
-                    }),
+                      maximumFractionDigits: 2,
+                    }).format(props.goal.interestRate),
                   })}
                 </Badge>
               )}
@@ -271,9 +125,9 @@ const EditableGoalCardContent = (
                   bg="var(--button-color-confirm)"
                   onClick={(e) => {
                     e.stopPropagation();
-                    doCompleteGoal.mutate(props.goal.id);
+                    completeGoalMutation.mutate(props.goal.id);
                   }}
-                  loading={doCompleteGoal.isPending}
+                  loading={completeGoalMutation.isPending}
                 >
                   {t("mark_as_complete")}
                 </Button>
@@ -299,7 +153,9 @@ const EditableGoalCardContent = (
                         sumAccountsTotalBalance(props.goal.accounts) -
                           props.goal.initialAmount,
                         false,
-                        userSettingsQuery.data?.currency ?? "USD",
+                        preferredCurrency,
+                        SignDisplay.Auto,
+                        intlLocale,
                       ),
                     }}
                     components={[
@@ -315,12 +171,23 @@ const EditableGoalCardContent = (
                     <NumberInput
                       maw={100}
                       min={0}
-                      prefix={getCurrencySymbol(
-                        userSettingsQuery.data?.currency,
-                      )}
-                      thousandSeparator=","
+                      prefix={getCurrencySymbol(preferredCurrency)}
+                      thousandSeparator={thousandsSeparator}
+                      decimalSeparator={decimalSeparator}
                       {...goalTargetAmountField.getInputProps()}
-                      onBlur={submitChanges}
+                      onBlur={() => {
+                        if (goalTargetAmountField.getValue() > 0) {
+                          updateGoalMutation.mutate({
+                            id: props.goal.id,
+                            amount: goalTargetAmountField.getValue(),
+                          });
+                        } else {
+                          notifications.show({
+                            color: "var(--button-color-destructive)",
+                            message: t("invalid_target_amount"),
+                          });
+                        }
+                      }}
                       elevation={1}
                     />
                   </Flex>
@@ -333,7 +200,9 @@ const EditableGoalCardContent = (
                       sumAccountsTotalBalance(props.goal.accounts) -
                         props.goal.initialAmount,
                       false,
-                      userSettingsQuery.data?.currency ?? "USD",
+                      preferredCurrency,
+                      SignDisplay.Auto,
+                      intlLocale,
                     ),
                     total: convertNumberToCurrency(
                       getGoalTargetAmount(
@@ -341,7 +210,9 @@ const EditableGoalCardContent = (
                         props.goal.initialAmount,
                       ),
                       false,
-                      userSettingsQuery.data?.currency ?? "USD",
+                      preferredCurrency,
+                      SignDisplay.Auto,
+                      intlLocale,
                     ),
                   }}
                   components={[
@@ -373,7 +244,9 @@ const EditableGoalCardContent = (
                           sumAccountsTotalBalance(props.goal.accounts) -
                             props.goal.initialAmount,
                           false,
-                          userSettingsQuery.data?.currency ?? "USD",
+                          preferredCurrency,
+                          SignDisplay.Auto,
+                          intlLocale,
                         ),
                       }}
                       components={[<DimmedText size="sm" key="label" />]}
@@ -386,9 +259,24 @@ const EditableGoalCardContent = (
                       <DateInput
                         className="h-8"
                         {...goalTargetDateField.getInputProps()}
-                        locale={locale}
+                        locale={dayjsLocale}
                         valueFormat={longDateFormat}
-                        onChange={submitTargetDateChanges}
+                        onChange={(date) => {
+                          const parsedDate = dayjs(date);
+
+                          if (parsedDate.isValid()) {
+                            goalTargetDateField.setValue(parsedDate.toDate());
+                            updateGoalMutation.mutate({
+                              id: props.goal.id,
+                              completeDate: parsedDate.format("YYYY-MM-DD"),
+                            });
+                          } else {
+                            notifications.show({
+                              color: "var(--button-color-destructive)",
+                              message: t("invalid_target_date"),
+                            });
+                          }
+                        }}
                       />
                     </Flex>
                   </>
@@ -418,7 +306,9 @@ const EditableGoalCardContent = (
                         sumAccountsTotalBalance(props.goal.accounts) -
                           props.goal.initialAmount,
                         false,
-                        userSettingsQuery.data?.currency ?? "USD",
+                        preferredCurrency,
+                        SignDisplay.Auto,
+                        intlLocale,
                       ),
                     }}
                     components={[
@@ -437,12 +327,24 @@ const EditableGoalCardContent = (
                       size="sm"
                       maw={100}
                       min={0}
-                      prefix={getCurrencySymbol(
-                        userSettingsQuery.data?.currency,
-                      )}
-                      thousandSeparator=","
+                      prefix={getCurrencySymbol(preferredCurrency)}
+                      thousandSeparator={thousandsSeparator}
+                      decimalSeparator={decimalSeparator}
                       {...goalMonthlyContributionField.getInputProps()}
-                      onBlur={submitChanges}
+                      onBlur={() => {
+                        if (goalMonthlyContributionField.getValue() > 0) {
+                          updateGoalMutation.mutate({
+                            id: props.goal.id,
+                            monthlyContribution:
+                              goalMonthlyContributionField.getValue(),
+                          });
+                        } else {
+                          notifications.show({
+                            color: "var(--button-color-destructive)",
+                            message: t("invalid_monthly_contribution"),
+                          });
+                        }
+                      }}
                       elevation={1}
                     />
                   </Flex>
@@ -457,12 +359,16 @@ const EditableGoalCardContent = (
                     amount: convertNumberToCurrency(
                       props.goal.monthlyContributionProgress,
                       false,
-                      userSettingsQuery.data?.currency ?? "USD",
+                      preferredCurrency,
+                      SignDisplay.Auto,
+                      intlLocale,
                     ),
                     total: convertNumberToCurrency(
                       props.goal.monthlyContribution,
                       false,
-                      userSettingsQuery.data?.currency ?? "USD",
+                      preferredCurrency,
+                      SignDisplay.Auto,
+                      intlLocale,
                     ),
                   }}
                   components={[
@@ -486,7 +392,7 @@ const EditableGoalCardContent = (
             color="var(--button-color-destructive)"
             onClick={(e) => {
               e.stopPropagation();
-              doDeleteGoal.mutate(props.goal.id);
+              deleteGoalMutation.mutate(props.goal.id);
             }}
             h="100%"
           >

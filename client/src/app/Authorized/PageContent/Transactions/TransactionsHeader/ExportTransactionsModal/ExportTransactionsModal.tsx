@@ -1,0 +1,194 @@
+import classes from "./ExportTransactionsModal.module.css";
+
+import React from "react";
+import { Button, Flex, Stack } from "@mantine/core";
+import { useDisclosure } from "@mantine/hooks";
+import { FileUpIcon } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import Modal from "~/components/core/Modal/Modal";
+import FilterCard from "../FilterCard/FilterCard";
+import FieldSelectionCard from "./FieldSelectionCard/FieldSelectionCard";
+import ColumnOrderCard from "./ColumnOrderCard/ColumnOrderCard";
+import useIsMobile from "~/hooks/useIsMobile";
+import { useTransactionFilters } from "~/providers/TransactionFiltersProvider/TransactionFiltersProvider";
+import { useTransactionCategories } from "~/providers/TransactionCategoryProvider/TransactionCategoryProvider";
+import { ITransaction, Filters } from "~/models/transaction";
+import { getFilteredTransactions } from "~/helpers/transactions";
+import PrimaryHeading from "~/components/core/Heading/PrimaryHeading/PrimaryHeading";
+import { useInstitutionsQuery } from "~/hooks/queries/useInstitutionsQuery";
+import { useTransactionsQuery } from "~/hooks/queries/useTransactionsQuery";
+
+const escapeCsvValue = (value: string): string =>
+  `"${value.replace(/"/g, '""')}"`;
+
+const buildTransactionsCsv = (
+  transactions: ITransaction[],
+  orderedFields: string[],
+  fieldLabels: Record<string, string>,
+  accountLookup: Record<string, string>,
+): string => {
+  const getFieldValue = (t: ITransaction, key: string): string => {
+    switch (key) {
+      case "date":
+        return t.date;
+      case "merchantName":
+        return t.merchantName ?? "";
+      case "amount":
+        return t.amount.toString();
+      case "category":
+        return t.subcategory?.trim() ? t.subcategory : (t.category ?? "");
+      case "account":
+        return accountLookup[t.accountID] ?? "";
+      case "pending":
+        return t.pending ? "true" : "false";
+      case "source":
+        return t.source;
+      default:
+        return "";
+    }
+  };
+
+  const headers = orderedFields
+    .map((k) => escapeCsvValue(fieldLabels[k] ?? k))
+    .join(",");
+
+  const rows = transactions.map((t) =>
+    orderedFields.map((key) => escapeCsvValue(getFieldValue(t, key))).join(","),
+  );
+
+  return [headers, ...rows].join("\n");
+};
+
+export interface IExportField {
+  key: string;
+  labelKey: string;
+}
+
+export const EXPORT_FIELDS: IExportField[] = [
+  { key: "date", labelKey: "date" },
+  { key: "merchantName", labelKey: "merchant_name" },
+  { key: "amount", labelKey: "amount" },
+  { key: "category", labelKey: "category" },
+  { key: "account", labelKey: "account" },
+  { key: "pending", labelKey: "pending" },
+  { key: "source", labelKey: "source" },
+];
+
+const DEFAULT_FIELDS = EXPORT_FIELDS.map((f) => f.key);
+
+const ExportTransactionsModal = (): React.ReactNode => {
+  const [opened, { open, close }] = useDisclosure(false);
+  const [orderedFields, setOrderedFields] =
+    React.useState<string[]>(DEFAULT_FIELDS);
+
+  const { t } = useTranslation();
+  const { transactionFilters } = useTransactionFilters();
+  const { allTransactionCategories: transactionCategories } =
+    useTransactionCategories();
+  const institutionsQuery = useInstitutionsQuery();
+  const isMobile = useIsMobile();
+  const transactionsQuery = useTransactionsQuery();
+
+  const accountLookup = React.useMemo<Record<string, string>>(() => {
+    if (!institutionsQuery.data) {
+      return {};
+    }
+
+    return institutionsQuery.data.reduce<Record<string, string>>(
+      (acc, institution) => {
+        for (const account of institution.accounts) {
+          acc[account.id] = account.name;
+        }
+        return acc;
+      },
+      {},
+    );
+  }, [institutionsQuery.data]);
+
+  const filteredTransactions = React.useMemo(
+    () =>
+      getFilteredTransactions(
+        transactionsQuery.data ?? [],
+        transactionFilters ?? new Filters(),
+        transactionCategories,
+      ),
+    [transactionsQuery.data, transactionFilters, transactionCategories],
+  );
+
+  const handleFieldsChange = (newSelected: string[]) => {
+    const kept = orderedFields.filter((f) => newSelected.includes(f));
+    const added = newSelected.filter((f) => !orderedFields.includes(f));
+    setOrderedFields([...kept, ...added]);
+  };
+
+  const handleExport = () => {
+    const fieldLabels = Object.fromEntries(
+      EXPORT_FIELDS.map((f) => [f.key, t(f.labelKey)]),
+    );
+
+    const csv = buildTransactionsCsv(
+      filteredTransactions,
+      orderedFields,
+      fieldLabels,
+      accountLookup,
+    );
+
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "transactions.csv";
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+    }, 0);
+  };
+
+  return (
+    <>
+      <Button
+        size="sm"
+        rightSection={<FileUpIcon size="1rem" />}
+        onClick={open}
+      >
+        {t("export")}
+      </Button>
+      <Modal
+        opened={opened}
+        onClose={close}
+        fullScreen={isMobile}
+        size="80rem"
+        title={
+          <PrimaryHeading order={4}>{t("export_transactions")}</PrimaryHeading>
+        }
+      >
+        <Stack className={classes.container} gap="0.5rem">
+          <FilterCard />
+          <Flex
+            className={classes.fieldsContainer}
+            gap="0.5rem"
+            align="flex-start"
+          >
+            <FieldSelectionCard
+              selectedFields={orderedFields}
+              onChange={handleFieldsChange}
+            />
+            <ColumnOrderCard
+              orderedFields={orderedFields}
+              onChange={setOrderedFields}
+            />
+          </Flex>
+          <Button
+            onClick={handleExport}
+            disabled={orderedFields.length === 0}
+            rightSection={<FileUpIcon size="1rem" />}
+          >
+            {t("export_csv")}
+          </Button>
+        </Stack>
+      </Modal>
+    </>
+  );
+};
+
+export default ExportTransactionsModal;

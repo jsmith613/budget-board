@@ -1,10 +1,8 @@
 import { MultiSelect, MultiSelectProps } from "@mantine/core";
 import React from "react";
-import { useAuth } from "~/providers/AuthProvider/AuthProvider";
-import { useQuery } from "@tanstack/react-query";
 import { AccountSource, IAccountResponse } from "~/models/account";
-import { AxiosResponse } from "axios";
 import { useTranslation } from "react-i18next";
+import { useAccountsQuery } from "~/hooks/queries/useAccountsQuery";
 
 export interface AccountMultiSelectInputBaseProps extends MultiSelectProps {
   hideHidden?: boolean;
@@ -21,28 +19,15 @@ const AccountMultiSelectInputBase = ({
   ...props
 }: AccountMultiSelectInputBaseProps): React.ReactNode => {
   const { t } = useTranslation();
-  const { request } = useAuth();
 
-  const accountsQuery = useQuery({
-    queryKey: ["accounts"],
-    queryFn: async (): Promise<IAccountResponse[]> => {
-      const res: AxiosResponse = await request({
-        url: "/api/account",
-        method: "GET",
-      });
-
-      if (res.status === 200) {
-        return res.data as IAccountResponse[];
-      }
-
-      return [];
-    },
-  });
+  const accountsQuery = useAccountsQuery();
 
   const getFilteredAccounts = (): IAccountResponse[] => {
-    let filteredAccounts = (accountsQuery.data ?? []).filter(
-      (a) => a.deleted === null
+    const sortedAccounts = (accountsQuery.data ?? []).sort((a, b) =>
+      a.name.localeCompare(b.name),
     );
+
+    let filteredAccounts = sortedAccounts.filter((a) => a.deleted === null);
 
     if (hideHidden) {
       filteredAccounts = filteredAccounts.filter((a) => !a.hideAccount);
@@ -50,13 +35,13 @@ const AccountMultiSelectInputBase = ({
 
     if (filterTypes.length > 0) {
       filteredAccounts = filteredAccounts.filter((a) =>
-        filterTypes?.includes(a.type)
+        filterTypes?.includes(a.type),
       );
     }
 
     if (manualOnly) {
       filteredAccounts = filteredAccounts.filter(
-        (a) => a.source === AccountSource.Manual
+        (a) => a.source === AccountSource.Manual,
       );
     }
 

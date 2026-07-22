@@ -1,4 +1,4 @@
-import { Stack } from "@mantine/core";
+import { Group, Stack } from "@mantine/core";
 import { IBudget } from "~/models/budget";
 import React from "react";
 import { ICategory, ICategoryNode } from "~/models/category";
@@ -9,6 +9,7 @@ import {
 import BudgetParentCard from "./BudgetParentCard/BudgetParentCard";
 import DimmedText from "~/components/core/Text/DimmedText/DimmedText";
 import { useTranslation } from "react-i18next";
+import { InfoIcon } from "lucide-react";
 
 interface BudgetsGroupProps {
   budgets: IBudget[];
@@ -25,17 +26,17 @@ const BudgetsGroup = (props: BudgetsGroupProps): React.ReactNode => {
   const categoryToBudgetsMap = buildCategoryToBudgetsMap(props.budgets);
   const categoryToLimitsMap = buildCategoryToLimitsMap(
     props.budgets,
-    props.categoryTree
+    props.categoryTree,
   );
 
   return (
-    <Stack gap="0.5rem" align="center">
+    <Stack gap="0.75rem" align="center">
       {props.budgets.length > 0 ? (
         props.categoryTree.map((category) => {
           if (
             categoryToBudgetsMap.has(category.value.toLocaleLowerCase()) ||
             category.subCategories.some((subCategory) =>
-              categoryToBudgetsMap.has(subCategory.value.toLocaleLowerCase())
+              categoryToBudgetsMap.has(subCategory.value.toLocaleLowerCase()),
             )
           ) {
             return (
@@ -55,7 +56,10 @@ const BudgetsGroup = (props: BudgetsGroupProps): React.ReactNode => {
           return null;
         })
       ) : (
-        <DimmedText size="sm">{t("no_budgets")}</DimmedText>
+        <Group justify="center" align="center" gap="0.5rem">
+          <InfoIcon size={20} color="var(--base-color-text-dimmed)" />
+          <DimmedText size="sm">{t("no_budgets")}</DimmedText>
+        </Group>
       )}
     </Stack>
   );

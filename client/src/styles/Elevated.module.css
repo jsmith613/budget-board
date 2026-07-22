@@ -1,6 +1,10 @@
 .root {
-  background-color: var(--background-color-elevated);
+  --card-bg: var(--background-color-elevated);
   border-color: var(--elevated-color-border);
+}
+
+[data-mantine-color-scheme] .root {
+  background-color: var(--background-color-elevated);
 }
 
 .input {

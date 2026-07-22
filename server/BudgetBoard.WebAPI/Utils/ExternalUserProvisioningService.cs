@@ -1,5 +1,8 @@
 ﻿using System.Security.Claims;
 using BudgetBoard.Database.Models;
+using BudgetBoard.Service.Helpers;
+using BudgetBoard.Service.Interfaces;
+using BudgetBoard.Service.Models;
 using BudgetBoard.WebAPI.Resources;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Identity;
@@ -10,6 +13,7 @@ namespace BudgetBoard.Utils
     public class ExternalUserProvisioningService(
         UserManager<ApplicationUser> userManager,
         IConfiguration configuration,
+        IWidgetSettingsService widgetSettingsService,
         ILogger<ExternalUserProvisioningService> logger,
         IStringLocalizer<ApiLogStrings> logLocalizer
     ) : IExternalUserProvisioningService
@@ -18,14 +22,17 @@ namespace BudgetBoard.Utils
             userManager ?? throw new ArgumentNullException(nameof(userManager));
         private readonly IConfiguration _configuration =
             configuration ?? throw new ArgumentNullException(nameof(configuration));
+        private readonly IWidgetSettingsService _widgetSettingsService =
+            widgetSettingsService ?? throw new ArgumentNullException(nameof(widgetSettingsService));
         private readonly ILogger<ExternalUserProvisioningService> _logger =
             logger ?? throw new ArgumentNullException(nameof(logger));
         private readonly IStringLocalizer<ApiLogStrings> _logLocalizer = logLocalizer;
 
-        public async Task<bool> ProvisionExternalUserAsync(
+        public async Task<ExternalUserProvisioningResult> ProvisionExternalUserAsync(
             ClaimsPrincipal principal,
             HttpContext httpContext,
-            string schemeName
+            string schemeName,
+            bool isPersistent = false
         )
         {
             ArgumentNullException.ThrowIfNull(principal);
@@ -45,11 +52,12 @@ namespace BudgetBoard.Utils
                     "{LogMessage}",
                     _logLocalizer["ExternalProviderClaimsMissingLog"]
                 );
-                return false;
+                return ExternalUserProvisioningResult.Failed();
             }
 
             // Find or create local user
             var user = await _userManager.FindByEmailAsync(email);
+            var wasUserCreated = false;
             if (user == null)
             {
                 // Check if new user creation is disabled
@@ -57,7 +65,7 @@ namespace BudgetBoard.Utils
                 if (disableNewUsers)
                 {
                     _logger.LogWarning("{LogMessage}", _logLocalizer["NewUserCreationDisabledLog"]);
-                    return false;
+                    return ExternalUserProvisioningResult.Failed();
                 }
 
                 user = new ApplicationUser
@@ -77,7 +85,36 @@ namespace BudgetBoard.Utils
                             string.Join(", ", createResult.Errors.Select(e => e.Description))
                         ]
                     );
-                    return false;
+                    return ExternalUserProvisioningResult.Failed();
+                }
+
+                wasUserCreated = true;
+
+                try
+                {
+                    foreach (var layout in WidgetSettingsHelpers.DefaultLayouts)
+                    {
+                        await _widgetSettingsService.CreateWidgetSettingsAsync(
+                            user.Id,
+                            new WidgetSettingsCreateRequest
+                            {
+                                WidgetType = layout.WidgetType,
+                                LgX = layout.LgX,
+                                LgY = layout.LgY,
+                                LgW = layout.LgW,
+                                LgH = layout.LgH,
+                                SmY = layout.SmY,
+                                SmH = layout.SmH,
+                            }
+                        );
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        "{LogMessage}",
+                        _logLocalizer["DefaultWidgetSeedingFailedLog", user.Id, ex.Message]
+                    );
                 }
 
                 _logger.LogInformation("{LogMessage}", _logLocalizer["UserProvisionedLog"]);
@@ -94,12 +131,14 @@ namespace BudgetBoard.Utils
             );
             if (!hasLogin)
             {
-                // Check if adding new logins is disabled
-                var disableNewUsers = _configuration.GetValue<bool>("DISABLE_NEW_USERS");
-                if (disableNewUsers)
+                // Existing local accounts must link OIDC explicitly through the authenticated settings flow.
+                if (!wasUserCreated)
                 {
-                    _logger.LogWarning("{LogMessage}", _logLocalizer["AddingLoginDisabledLog"]);
-                    return false;
+                    _logger.LogInformation(
+                        "{LogMessage}",
+                        _logLocalizer["OidcExplicitLinkRequiredLog", user.Id]
+                    );
+                    return ExternalUserProvisioningResult.ExplicitLinkingRequired();
                 }
 
                 var loginInfo = new UserLoginInfo(schemeName, providerKey, schemeName);
@@ -114,7 +153,7 @@ namespace BudgetBoard.Utils
                             string.Join(", ", addLoginResult.Errors.Select(e => e.Description))
                         ]
                     );
-                    return false;
+                    return ExternalUserProvisioningResult.Failed();
                 }
             }
 
@@ -129,10 +168,11 @@ namespace BudgetBoard.Utils
             var identity = new ClaimsIdentity(claims, IdentityConstants.ApplicationScheme);
             await httpContext.SignInAsync(
                 IdentityConstants.ApplicationScheme,
-                new ClaimsPrincipal(identity)
+                new ClaimsPrincipal(identity),
+                new AuthenticationProperties { IsPersistent = isPersistent }
             );
 
-            return true;
+            return ExternalUserProvisioningResult.Success();
         }
     }
 }

@@ -43,7 +43,7 @@ public class LunchFlowService(
             throw new BudgetBoardServiceException(responseLocalizer["LunchFlowApiKeyMissingError"]);
         }
 
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         var requestUrl = LunchFlowBaseUrl + LunchFlowAccountsEndpoint;
         var response = await SendQuery(requestUrl, apiKey);
@@ -70,7 +70,7 @@ public class LunchFlowService(
     /// <inheritdoc />
     public async Task RemoveApiKeyAsync(Guid userGuid)
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         userData.LunchFlowApiKey = string.Empty;
 
@@ -84,7 +84,7 @@ public class LunchFlowService(
     public async Task<IList<string>> RefreshAccountsAsync(Guid userGuid)
     {
         var errors = new List<string>();
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         if (string.IsNullOrEmpty(userData.LunchFlowApiKey))
         {
@@ -116,45 +116,30 @@ public class LunchFlowService(
         return errors;
     }
 
-    private async Task<ApplicationUser> GetCurrentUserAsync(string id)
+    private async Task<ApplicationUser> GetCurrentUserAsync(Guid id)
     {
-        ApplicationUser? foundUser;
-        try
-        {
-            foundUser = await userDataContext
-                .ApplicationUsers.Include(u => u.Accounts)
-                .ThenInclude(a => a.Transactions)
-                .Include(u => u.Accounts)
-                .ThenInclude(a => a.Balances)
-                .Include(u => u.Institutions)
-                .Include(u => u.LunchFlowAccounts)
-                .ThenInclude(a => a.LinkedAccount)
-                .AsSplitQuery()
-                .FirstOrDefaultAsync(u => u.Id == new Guid(id));
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(
-                ex,
-                "{LogMessage}",
-                logLocalizer["UserDataRetrievalErrorLog", ex.Message]
-            );
-            throw new BudgetBoardServiceException(responseLocalizer["UserDataRetrievalError"]);
-        }
-
-        if (foundUser == null)
-        {
-            logger.LogError("{LogMessage}", logLocalizer["InvalidUserErrorLog"]);
-            throw new BudgetBoardServiceException(responseLocalizer["InvalidUserError"]);
-        }
-
-        return foundUser;
+        return await UserDataServiceHelper.GetCurrentUserAsync(
+            userDataContext,
+            logger,
+            logLocalizer,
+            responseLocalizer,
+            id,
+            users =>
+                users
+                    .Include(u => u.Accounts)
+                    .ThenInclude(a => a.Transactions)
+                    .Include(u => u.Accounts)
+                    .ThenInclude(a => a.Balances)
+                    .Include(u => u.Institutions)
+                    .Include(u => u.LunchFlowAccounts)
+                    .ThenInclude(a => a.LinkedAccount)
+        );
     }
 
     private async Task<List<string>> RemoveLunchFlowDataAsync(Guid userGuid)
     {
         List<string> errors = [];
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         foreach (var lunchFlowAccount in userData.LunchFlowAccounts.ToList())
         {
@@ -163,10 +148,13 @@ public class LunchFlowService(
             );
             if (linkedAccount != null)
             {
-                await accountService.UpdateAccountSourceAsync(
+                await accountService.UpdateAccountAsync(
                     userData.Id,
-                    linkedAccount.ID,
-                    AccountSource.Manual
+                    new AccountUpdateRequest
+                    {
+                        ID = linkedAccount.ID,
+                        Source = AccountSource.Manual,
+                    }
                 );
             }
 
@@ -328,7 +316,7 @@ public class LunchFlowService(
     private async Task<IList<string>> SyncTransactionsAsync(Guid userGuid)
     {
         var errors = new List<string>();
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         if (string.IsNullOrEmpty(userData.LunchFlowApiKey))
         {
@@ -340,71 +328,97 @@ public class LunchFlowService(
         var lunchFlowAccounts = userData.LunchFlowAccounts.Where(a => a.LinkedAccountId != null);
         foreach (var lunchFlowAccount in lunchFlowAccounts)
         {
-            var lunchFlowTransactionsData = await GetLunchFlowTransactionsDataAsync(
-                userData.LunchFlowApiKey,
-                lunchFlowAccount.SyncID
-            );
-            if (lunchFlowTransactionsData == null)
+            try
             {
-                logger.LogError(
-                    "{LogMessage}",
-                    logLocalizer[
-                        "LunchFlowTransactionDataRetrievalErrorLog",
-                        lunchFlowAccount.SyncID
-                    ]
+                var lunchFlowTransactionsData = await GetLunchFlowTransactionsDataAsync(
+                    userData.LunchFlowApiKey,
+                    lunchFlowAccount.SyncID
                 );
-                errors.Add(
-                    responseLocalizer[
-                        "LunchFlowTransactionDataRetrievalError",
-                        lunchFlowAccount.SyncID
-                    ]
-                );
-                continue;
-            }
-
-            var userAccount = userData.Accounts.FirstOrDefault(a =>
-                a.ID == lunchFlowAccount.LinkedAccountId
-            );
-            if (userAccount == null)
-            {
-                logger.LogError(
-                    "{LogMessage}",
-                    logLocalizer[
-                        "LunchFlowLinkedAccountNotFoundForSyncErrorLog",
-                        lunchFlowAccount.SyncID
-                    ]
-                );
-                errors.Add(
-                    responseLocalizer[
-                        "LunchFlowLinkedAccountNotFoundForSyncError",
-                        lunchFlowAccount.SyncID
-                    ]
-                );
-                continue;
-            }
-
-            List<Transaction> userTransactions =
-            [
-                .. userAccount.Transactions.OrderByDescending(t => t.Date),
-            ];
-            foreach (var transaction in lunchFlowTransactionsData.Transactions)
-            {
-                if (userTransactions.Any(t => t.SyncID != null && t.SyncID == transaction.ID))
+                if (lunchFlowTransactionsData == null)
                 {
+                    logger.LogError(
+                        "{LogMessage}",
+                        logLocalizer[
+                            "LunchFlowTransactionDataRetrievalErrorLog",
+                            lunchFlowAccount.SyncID
+                        ]
+                    );
+                    errors.Add(
+                        responseLocalizer[
+                            "LunchFlowTransactionDataRetrievalError",
+                            lunchFlowAccount.SyncID
+                        ]
+                    );
                     continue;
                 }
 
-                await transactionService.CreateTransactionAsync(
-                    userData.Id,
-                    new TransactionCreateRequest
+                var userAccount = userData.Accounts.FirstOrDefault(a =>
+                    a.ID == lunchFlowAccount.LinkedAccountId
+                );
+                if (userAccount == null)
+                {
+                    logger.LogError(
+                        "{LogMessage}",
+                        logLocalizer[
+                            "LunchFlowLinkedAccountNotFoundForSyncErrorLog",
+                            lunchFlowAccount.SyncID
+                        ]
+                    );
+                    errors.Add(
+                        responseLocalizer[
+                            "LunchFlowLinkedAccountNotFoundForSyncError",
+                            lunchFlowAccount.SyncID
+                        ]
+                    );
+                    continue;
+                }
+
+                List<Transaction> userTransactions =
+                [
+                    .. userAccount.Transactions.OrderByDescending(t => t.Date),
+                ];
+
+                // SyncStartDate allows the user to specify a date from which to start syncing transactions.
+                // If it is unset, all transactions will be synced.
+                var transactionsToSync = lunchFlowTransactionsData.Transactions.Where(t =>
+                    !lunchFlowAccount.SyncStartDate.HasValue
+                    || DateOnly.Parse(t.Date) >= lunchFlowAccount.SyncStartDate.Value
+                );
+
+                foreach (var transaction in transactionsToSync)
+                {
+                    if (userTransactions.Any(t => t.SyncID != null && t.SyncID == transaction.ID))
                     {
-                        AccountID = userAccount.ID,
-                        SyncID = transaction.ID,
-                        Amount = transaction.Amount,
-                        Date = DateTime.Parse(transaction.Date),
-                        MerchantName = transaction.Merchant,
-                        Source = TransactionSource.LunchFlow.Value,
+                        continue;
                     }
+
+                    await transactionService.CreateTransactionAsync(
+                        userData.Id,
+                        new TransactionCreateRequest
+                        {
+                            AccountID = userAccount.ID,
+                            SyncID = transaction.ID,
+                            Amount = transaction.Amount,
+                            Date = DateOnly.Parse(transaction.Date),
+                            MerchantName = transaction.Merchant,
+                            Source = TransactionSource.LunchFlow,
+                        }
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(
+                    ex,
+                    "{LogMessage}",
+                    logLocalizer[
+                        "LunchFlowAccountSyncExceptionLog",
+                        lunchFlowAccount.SyncID,
+                        ex.Message
+                    ]
+                );
+                errors.Add(
+                    responseLocalizer["LunchFlowAccountSyncException", lunchFlowAccount.SyncID]
                 );
             }
         }
@@ -452,7 +466,7 @@ public class LunchFlowService(
     private async Task<IList<string>> SyncBalancesAsync(Guid userGuid)
     {
         var errors = new List<string>();
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         if (string.IsNullOrEmpty(userData.LunchFlowApiKey))
         {
@@ -464,35 +478,61 @@ public class LunchFlowService(
         var lunchFlowAccounts = userData.LunchFlowAccounts.Where(a => a.LinkedAccountId != null);
         foreach (var lunchFlowAccount in lunchFlowAccounts)
         {
-            var lunchFlowBalancesData = await GetLunchFlowBalancesDataAsync(
-                userData.LunchFlowApiKey,
-                lunchFlowAccount.SyncID
-            );
-            if (lunchFlowBalancesData == null || lunchFlowBalancesData.Balance == null)
+            try
+            {
+                var lunchFlowBalancesData = await GetLunchFlowBalancesDataAsync(
+                    userData.LunchFlowApiKey,
+                    lunchFlowAccount.SyncID
+                );
+                if (lunchFlowBalancesData == null || lunchFlowBalancesData.Balance == null)
+                {
+                    logger.LogError(
+                        "{LogMessage}",
+                        logLocalizer[
+                            "LunchFlowBalanceDataRetrievalErrorLog",
+                            lunchFlowAccount.SyncID
+                        ]
+                    );
+                    errors.Add(
+                        responseLocalizer[
+                            "LunchFlowBalanceDataRetrievalError",
+                            lunchFlowAccount.SyncID
+                        ]
+                    );
+                    continue;
+                }
+
+                var error = await SyncHelpers.SyncBalance(
+                    userData,
+                    new BalanceCreateRequest
+                    {
+                        AccountID = lunchFlowAccount.LinkedAccountId!.Value,
+                        Amount = lunchFlowBalancesData.Balance.Amount,
+                        Date = DateOnly.FromDateTime(nowProvider.Now),
+                    },
+                    balanceService
+                );
+                if (error.HasValue)
+                {
+                    errors.Add(
+                        responseLocalizer[error.Value.ErrorKey, [.. error.Value.ErrorParams]]
+                    );
+                }
+            }
+            catch (Exception ex)
             {
                 logger.LogError(
+                    ex,
                     "{LogMessage}",
-                    logLocalizer["LunchFlowBalanceDataRetrievalErrorLog", lunchFlowAccount.SyncID]
+                    logLocalizer[
+                        "LunchFlowAccountSyncExceptionLog",
+                        lunchFlowAccount.SyncID,
+                        ex.Message
+                    ]
                 );
                 errors.Add(
-                    responseLocalizer["LunchFlowBalanceDataRetrievalError", lunchFlowAccount.SyncID]
+                    responseLocalizer["LunchFlowAccountSyncException", lunchFlowAccount.SyncID]
                 );
-                continue;
-            }
-
-            var error = await SyncHelpers.SyncBalance(
-                userData,
-                new BalanceCreateRequest
-                {
-                    AccountID = lunchFlowAccount.LinkedAccountId!.Value,
-                    Amount = lunchFlowBalancesData.Balance.Amount,
-                    DateTime = nowProvider.UtcNow,
-                },
-                balanceService
-            );
-            if (error.HasValue)
-            {
-                errors.Add(responseLocalizer[error.Value.ErrorKey, [.. error.Value.ErrorParams]]);
             }
         }
 

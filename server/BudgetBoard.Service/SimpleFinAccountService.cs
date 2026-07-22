@@ -1,5 +1,6 @@
 using BudgetBoard.Database.Data;
 using BudgetBoard.Database.Models;
+using BudgetBoard.Service.Helpers;
 using BudgetBoard.Service.Interfaces;
 using BudgetBoard.Service.Models;
 using BudgetBoard.Service.Resources;
@@ -23,7 +24,7 @@ public class SimpleFinAccountService(
         ISimpleFinAccountCreateRequest request
     )
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         var organization = userData.SimpleFinOrganizations.SingleOrDefault(i =>
             i.ID == request.OrganizationId
@@ -54,7 +55,7 @@ public class SimpleFinAccountService(
         Guid userGuid
     )
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         return userData
             .SimpleFinOrganizations.SelectMany(o => o.Accounts)
@@ -68,7 +69,7 @@ public class SimpleFinAccountService(
         ISimpleFinAccountUpdateRequest request
     )
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         var accountToUpdate = userData
             .SimpleFinOrganizations.SelectMany(o => o.Accounts)
@@ -94,7 +95,7 @@ public class SimpleFinAccountService(
     /// <inheritdoc />
     public async Task DeleteSimpleFinAccountAsync(Guid userGuid, Guid accountGuid)
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         var accountToDelete = userData
             .SimpleFinOrganizations.SelectMany(o => o.Accounts)
@@ -107,6 +108,14 @@ public class SimpleFinAccountService(
             );
         }
 
+        if (accountToDelete.LinkedAccountId != null)
+        {
+            var linkedAccount = userData.Accounts.FirstOrDefault(a =>
+                a.ID == accountToDelete.LinkedAccountId
+            );
+            linkedAccount?.Source = AccountSource.Manual;
+        }
+
         userDataContext.SimpleFinAccounts.Remove(accountToDelete);
         await userDataContext.SaveChangesAsync();
     }
@@ -117,7 +126,7 @@ public class SimpleFinAccountService(
         Guid? linkedAccountGuid
     )
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
         var accountToUpdate = userData.SimpleFinAccounts.SingleOrDefault(o =>
             o.ID == simpleFinAccountGuid
@@ -155,30 +164,43 @@ public class SimpleFinAccountService(
         await userDataContext.SaveChangesAsync();
     }
 
-    private async Task<ApplicationUser> GetCurrentUserAsync(string id)
+    public async Task UpdateSimpleFinAccountSyncStartDateAsync(
+        Guid userGuid,
+        Guid simpleFinAccountGuid,
+        DateOnly? syncStartDate
+    )
     {
-        ApplicationUser? foundUser;
-        try
+        var userData = await GetCurrentUserAsync(userGuid);
+
+        var accountToUpdate = userData.SimpleFinAccounts.SingleOrDefault(o =>
+            o.ID == simpleFinAccountGuid
+        );
+        if (accountToUpdate == null)
         {
-            foundUser = await userDataContext
-                .ApplicationUsers.Include(u => u.SimpleFinOrganizations)
-                .ThenInclude(i => i.Accounts)
-                .Include(u => u.Accounts)
-                .AsSplitQuery()
-                .FirstOrDefaultAsync(u => u.Id == new Guid(id));
-        }
-        catch (Exception ex)
-        {
-            logger.LogError("{LogMessage}", logLocalizer["UserDataRetrievalErrorLog", ex.Message]);
-            throw new BudgetBoardServiceException(responseLocalizer["UserDataRetrievalError"]);
+            logger.LogError("{LogMessage}", logLocalizer["SimpleFinAccountUpdateNotFoundLog"]);
+            throw new BudgetBoardServiceException(
+                responseLocalizer["SimpleFinAccountUpdateNotFoundError"]
+            );
         }
 
-        if (foundUser == null)
-        {
-            logger.LogError("{LogMessage}", logLocalizer["InvalidUserErrorLog"]);
-            throw new BudgetBoardServiceException(responseLocalizer["InvalidUserError"]);
-        }
+        accountToUpdate.SyncStartDate = syncStartDate;
 
-        return foundUser;
+        await userDataContext.SaveChangesAsync();
+    }
+
+    private async Task<ApplicationUser> GetCurrentUserAsync(Guid id)
+    {
+        return await UserDataServiceHelper.GetCurrentUserAsync(
+            userDataContext,
+            logger,
+            logLocalizer,
+            responseLocalizer,
+            id,
+            users =>
+                users
+                    .Include(u => u.SimpleFinOrganizations)
+                    .ThenInclude(i => i.Accounts)
+                    .Include(u => u.Accounts)
+        );
     }
 }

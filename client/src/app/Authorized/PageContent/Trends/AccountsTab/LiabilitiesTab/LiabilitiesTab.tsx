@@ -1,80 +1,48 @@
-import classes from "./LiabilitiesTab.module.css";
-
 import { Stack } from "@mantine/core";
 import React from "react";
 import { DatesRangeValue } from "@mantine/dates";
 import { mantineDateFormat } from "~/helpers/datetime";
 import AccountsSelectHeader from "~/components/AccountsSelectHeader/AccountsSelectHeader";
 import ValueChart from "~/components/Charts/ValueChart/ValueChart";
-import { useAuth } from "~/providers/AuthProvider/AuthProvider";
-import { useQueries, useQuery } from "@tanstack/react-query";
-import { IBalanceResponse } from "~/models/balance";
-import { AxiosResponse } from "axios";
-import { IAccountResponse } from "~/models/account";
+import { AccountTypeClassification } from "~/models/account";
 import { IItem } from "~/components/Charts/ValueChart/helpers/valueChart";
-import { useDate } from "~/providers/DateProvider/DateProvider";
+import { useLocale } from "~/providers/LocaleProvider/LocaleProvider";
+import { useAccountTypes } from "~/providers/AccountTypeProvider/AccountTypeProvider";
+import { useAccountsQuery } from "~/hooks/queries/useAccountsQuery";
+import { useBalancesQuery } from "~/hooks/queries/useBalancesQuery";
 
 const LiabilitiesTab = (): React.ReactNode => {
-  const { request } = useAuth();
-  const { dayjs } = useDate();
+  const { dayjs } = useLocale();
+  const { allAccountTypes } = useAccountTypes();
 
   const [selectedAccountIds, setSelectedAccountIds] = React.useState<string[]>(
     [],
   );
   const [dateRange, setDateRange] = React.useState<DatesRangeValue<string>>([
-    dayjs().subtract(1, "month").startOf("month").format(mantineDateFormat),
-    dayjs().startOf("month").format(mantineDateFormat),
+    dayjs().subtract(1, "month").format(mantineDateFormat),
+    dayjs().format(mantineDateFormat),
   ]);
 
-  const balancesQuery = useQueries({
-    queries: selectedAccountIds.map((accountId: string) => ({
-      queryKey: ["balances", accountId],
-      queryFn: async (): Promise<IBalanceResponse[]> => {
-        const res: AxiosResponse = await request({
-          url: "/api/balance",
-          method: "GET",
-          params: { accountId },
-        });
-
-        if (res.status === 200) {
-          return res.data as IBalanceResponse[];
-        }
-
-        return [];
-      },
-    })),
-    combine: (results) => {
-      return {
-        data: results.map((result) => result.data ?? []).flat(1),
-        isPending: results.some((result) => result.isPending),
-      };
-    },
+  const balancesQuery = useBalancesQuery({
+    accountIds: selectedAccountIds,
+    enabled: selectedAccountIds.length > 0,
   });
+  const accountsQuery = useAccountsQuery();
 
-  const accountsQuery = useQuery({
-    queryKey: ["accounts"],
-    queryFn: async (): Promise<IAccountResponse[]> => {
-      const res: AxiosResponse = await request({
-        url: "/api/account",
-        method: "GET",
-      });
-
-      if (res.status === 200) {
-        return res.data as IAccountResponse[];
-      }
-
-      return [];
-    },
-  });
+  const liabilityAccountTypes = allAccountTypes
+    .filter(
+      (type) => type.classification === AccountTypeClassification.Liability,
+    )
+    .map((type) => type.value);
 
   return (
-    <Stack className={classes.root}>
+    <Stack p="0.5rem">
       <AccountsSelectHeader
         selectedAccountIds={selectedAccountIds}
         setSelectedAccountIds={setSelectedAccountIds}
         dateRange={dateRange}
         setDateRange={setDateRange}
-        filters={["Loan", "Credit Card", "Mortgage"]}
+        filters={liabilityAccountTypes}
       />
       <ValueChart
         values={(balancesQuery.data ?? []).map((balance) => ({

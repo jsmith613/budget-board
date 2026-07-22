@@ -1,22 +1,75 @@
 import { filterBalancesByDateRange } from "~/helpers/balances";
-import { convertNumberToCurrency } from "~/helpers/currency";
-import { getDateFromMonthsAgo } from "~/helpers/datetime";
+import { convertNumberToCurrency, SignDisplay } from "~/helpers/currency";
+import { DateString, getDateFromMonthsAgo } from "~/helpers/datetime";
 import { CompositeChart, CompositeChartSeries } from "@mantine/charts";
 import { Group, Skeleton } from "@mantine/core";
-import { IAccountResponse } from "~/models/account";
+import { AccountTypeClassification, IAccountResponse } from "~/models/account";
 import { IBalanceResponse } from "~/models/balance";
 import React from "react";
-import { useAuth } from "~/providers/AuthProvider/AuthProvider";
-import { useQuery } from "@tanstack/react-query";
-import { IUserSettings } from "~/models/userSettings";
-import { AxiosResponse } from "axios";
 import { DatesRangeValue } from "@mantine/dates";
 import dayjs from "dayjs";
 import ChartTooltip from "../ChartTooltip/ChartTooltip";
-import { BuildNetWorthChartData } from "./helpers/netWorthChart";
 import DimmedText from "~/components/core/Text/DimmedText/DimmedText";
 import { useTranslation } from "react-i18next";
-import { useDate } from "~/providers/DateProvider/DateProvider";
+import { useLocale } from "~/providers/LocaleProvider/LocaleProvider";
+import { buildValueChartData } from "../ValueChart/helpers/valueChart";
+import { useAccountTypes } from "~/providers/AccountTypeProvider/AccountTypeProvider";
+import { useUserSettings } from "~/providers/UserSettingsProvider/UserSettingsProvider";
+
+interface NetWorthChartData {
+  date: DateString;
+  assets: number;
+  liabilities: number;
+  net: number;
+}
+
+/**
+ * Builds data for a net worth chart based on provided balances and accounts.
+ *
+ * @param balances An array of IBalance objects representing account balances.
+ * @param accounts An array of IAccount objects representing accounts.
+ * @returns An array of objects, where each object represents a date and the corresponding net worth data.
+ */
+const buildNetWorthChartData = (
+  balances: IBalanceResponse[],
+  accounts: IAccountResponse[],
+  liabilityAccountTypes: string[],
+  formatDateString: (date: DateString) => string,
+): NetWorthChartData[] => {
+  // Use the account balance chart data to build the net worth chart data.
+  const valuesWithParentId = balances.map((balance) => ({
+    ...balance,
+    parentId: balance.accountID,
+  }));
+  const accountChartData = buildValueChartData(
+    valuesWithParentId,
+    formatDateString,
+  );
+
+  const chartData: NetWorthChartData[] = [];
+  accountChartData.forEach((dataPoint) => {
+    const chartDataPoint: NetWorthChartData = {
+      date: dataPoint.date,
+      assets: 0,
+      liabilities: 0,
+      net: 0,
+    };
+
+    accounts.forEach((account) => {
+      const chartIndex = liabilityAccountTypes.includes(account.type)
+        ? "liabilities"
+        : "assets";
+
+      chartDataPoint[chartIndex] += (dataPoint[account.id] as number) ?? 0;
+    });
+
+    chartDataPoint.net = chartDataPoint.assets + chartDataPoint.liabilities;
+
+    chartData.push(chartDataPoint);
+  });
+
+  return chartData;
+};
 
 interface NetWorthChartProps {
   accounts: IAccountResponse[];
@@ -28,24 +81,9 @@ interface NetWorthChartProps {
 
 const NetWorthChart = (props: NetWorthChartProps): React.ReactNode => {
   const { t } = useTranslation();
-  const { dateFormat } = useDate();
-  const { request } = useAuth();
-
-  const userSettingsQuery = useQuery({
-    queryKey: ["userSettings"],
-    queryFn: async (): Promise<IUserSettings | undefined> => {
-      const res: AxiosResponse = await request({
-        url: "/api/userSettings",
-        method: "GET",
-      });
-
-      if (res.status === 200) {
-        return res.data as IUserSettings;
-      }
-
-      return undefined;
-    },
-  });
+  const { dateFormat, intlLocale } = useLocale();
+  const { allAccountTypes } = useAccountTypes();
+  const { preferredCurrency } = useUserSettings();
 
   const chartSeries: CompositeChartSeries[] = [
     { name: "assets", label: t("assets"), color: "green.6", type: "bar" },
@@ -59,16 +97,20 @@ const NetWorthChart = (props: NetWorthChartProps): React.ReactNode => {
   ];
 
   const chartValueFormatter = (value: number): string => {
-    return userSettingsQuery.isPending
-      ? ""
-      : convertNumberToCurrency(
-          value,
-          false,
-          userSettingsQuery.data?.currency ?? "USD",
-        );
+    return convertNumberToCurrency(
+      value,
+      false,
+      preferredCurrency,
+      SignDisplay.Auto,
+      intlLocale,
+    );
   };
 
-  const formatDateString = (date: Date) => dayjs(date).format(dateFormat);
+  const liabilityAccountTypes = allAccountTypes
+    .filter(
+      (type) => type.classification === AccountTypeClassification.Liability,
+    )
+    .map((type) => type.value);
 
   if (props.isPending) {
     return <Skeleton height={425} radius="lg" />;
@@ -88,7 +130,7 @@ const NetWorthChart = (props: NetWorthChartProps): React.ReactNode => {
     <CompositeChart
       h={400}
       w="100%"
-      data={BuildNetWorthChartData(
+      data={buildNetWorthChartData(
         filterBalancesByDateRange(
           props.balances,
           props.dateRange[0]
@@ -99,11 +141,12 @@ const NetWorthChart = (props: NetWorthChartProps): React.ReactNode => {
             : dayjs().toDate(),
         ),
         props.accounts,
-        formatDateString,
+        liabilityAccountTypes,
+        (date: DateString) => dayjs(date).format(dateFormat),
       )}
       series={chartSeries}
       withLegend
-      dataKey="dateString"
+      dataKey="date"
       composedChartProps={{ stackOffset: "sign" }}
       barProps={{
         stackId: "stack",

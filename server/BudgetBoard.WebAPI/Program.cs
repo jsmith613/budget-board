@@ -1,4 +1,5 @@
 using BudgetBoard.Database.Data;
+using BudgetBoard.Database.Helpers;
 using BudgetBoard.Database.Models;
 using BudgetBoard.Service;
 using BudgetBoard.Service.Helpers;
@@ -81,6 +82,7 @@ builder.Services.AddLocalization();
 
 var oidcEnabled = builder.Configuration.GetValue<bool>("OIDC_ENABLED");
 var disableLocalAuth = builder.Configuration.GetValue<bool>("DISABLE_LOCAL_AUTH");
+var demoModeEnabled = builder.Configuration.GetValue<bool>("DEMO_MODE");
 
 // Validate configuration: if local auth is disabled, OIDC must be enabled
 if (disableLocalAuth && !oidcEnabled)
@@ -123,7 +125,14 @@ builder
         options.DefaultSignInScheme = IdentityConstants.ApplicationScheme;
         options.DefaultChallengeScheme = IdentityConstants.ApplicationScheme;
     })
-    .AddCookie(IdentityConstants.ApplicationScheme);
+    .AddCookie(
+        IdentityConstants.ApplicationScheme,
+        options =>
+        {
+            options.ExpireTimeSpan = TimeSpan.FromDays(30);
+            options.SlidingExpiration = true;
+        }
+    );
 builder.Services.AddAuthorization();
 
 // If the user sets the email env variables, then configure confirmation emails, otherwise disable.
@@ -152,7 +161,8 @@ if (!string.IsNullOrEmpty(emailSender) && !disableLocalAuth)
 }
 
 builder.Services.ConfigureOptions<ConfigureJsonOptions>();
-builder.Services.AddControllers();
+builder.Services.AddScoped<DemoModeFilter>();
+builder.Services.AddControllers(options => options.Filters.Add<DemoModeFilter>());
 
 //Add support to logging with SERILOG
 builder.Host.UseSerilog(
@@ -175,11 +185,9 @@ var autoUpdateDb = builder.Configuration.GetValue<bool>("AUTO_UPDATE_DB");
 // Register the new provisioning service after Identity is configured
 builder.Services.AddScoped<IExternalUserProvisioningService, ExternalUserProvisioningService>();
 
-// Register OIDC token service if OIDC is enabled
-if (oidcEnabled)
-{
-    builder.Services.AddScoped<IOidcTokenService, OidcTokenService>();
-}
+// ApplicationUserController depends on this service even when OIDC is disabled.
+// OIDC settings are validated before the service exchanges a code.
+builder.Services.AddScoped<IOidcTokenService, OidcTokenService>();
 
 if (!builder.Configuration.GetValue<bool>("DISABLE_AUTO_SYNC"))
 {
@@ -223,6 +231,7 @@ builder.Services.AddScoped<ITransactionService, TransactionService>();
 builder.Services.AddScoped<IBudgetService, BudgetService>();
 builder.Services.AddScoped<IBalanceService, BalanceService>();
 builder.Services.AddScoped<ITransactionCategoryService, TransactionCategoryService>();
+builder.Services.AddScoped<IAccountTypeService, AccountTypeService>();
 builder.Services.AddScoped<IGoalService, GoalService>();
 builder.Services.AddScoped<IInstitutionService, InstitutionService>();
 builder.Services.AddScoped<ISyncService, SyncService>();
@@ -232,6 +241,7 @@ builder.Services.AddScoped<IApplicationUserService, ApplicationUserService>();
 builder.Services.AddScoped<IUserSettingsService, UserSettingsService>();
 builder.Services.AddScoped<IAutomaticRuleService, AutomaticRuleService>();
 builder.Services.AddScoped<IAssetService, AssetService>();
+builder.Services.AddScoped<IAssetTypeService, AssetTypeService>();
 builder.Services.AddScoped<IValueService, ValueService>();
 builder.Services.AddScoped<IWidgetSettingsService, WidgetSettingsService>();
 builder.Services.AddScoped<INetWorthWidgetLineService, NetWorthWidgetLineService>();
@@ -244,6 +254,33 @@ builder.Services.AddScoped<
     AutomaticTransactionCategorizerService
 >();
 builder.Services.AddScoped<ILunchFlowAccountService, LunchFlowAccountService>();
+builder.Services.AddScoped<IDemoSeedService, DemoSeedService>();
+
+// Enabling demo mode will clear the database and seed demo data on startup.
+// THIS SHOULD NOT BE ENABLED IN TYPICAL DEPLOYMENTS!
+if (demoModeEnabled)
+{
+    builder.Services.AddQuartz(options =>
+    {
+        var jobKey = new JobKey("DemoResetJob");
+        options.AddJob<DemoResetJob>(opts => opts.WithIdentity(jobKey));
+
+        options.AddTrigger(trigger =>
+            trigger
+                .ForJob(jobKey)
+                // Allow a minute for everything to settle after boot before starting the job
+                .StartAt(DateBuilder.FutureDate(1, IntervalUnit.Minute))
+                .WithSimpleSchedule(schedule => schedule.WithIntervalInHours(4).RepeatForever())
+        );
+    });
+
+    // NOTE: AddQuartzHostedService may already be registered by the sync job block above.
+    // Quartz deduplicates the hosted service registration internally, so this is safe.
+    builder.Services.AddQuartzHostedService(options =>
+    {
+        options.WaitForJobsToComplete = true;
+    });
+}
 
 var app = builder.Build();
 
@@ -271,6 +308,11 @@ if (disableNewUsers)
 else
 {
     logger.LogInformation("New user creation enabled");
+}
+
+if (demoModeEnabled)
+{
+    logger.LogInformation("Demo mode enabled - certain operations are disabled");
 }
 
 if (app.Environment.IsDevelopment())
@@ -334,6 +376,16 @@ if (autoUpdateDb)
 else
 {
     System.Diagnostics.Debug.WriteLine("Automatic Db updates not enabled.");
+}
+
+// Enabling demo mode will clear the database and seed demo data on startup.
+// THIS SHOULD NOT BE ENABLED IN TYPICAL DEPLOYMENTS!
+if (demoModeEnabled)
+{
+    logger.LogInformation("Demo mode enabled: seeding initial demo data on startup…");
+    using var seedScope = app.Services.CreateScope();
+    var demoSeedService = seedScope.ServiceProvider.GetRequiredService<IDemoSeedService>();
+    await demoSeedService.ResetAndSeedAsync();
 }
 
 app.Run();

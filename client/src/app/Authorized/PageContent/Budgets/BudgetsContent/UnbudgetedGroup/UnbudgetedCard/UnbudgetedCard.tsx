@@ -1,21 +1,17 @@
-import { convertNumberToCurrency } from "~/helpers/currency";
+import { convertNumberToCurrency, SignDisplay } from "~/helpers/currency";
 import { ActionIcon, Group, LoadingOverlay, Stack } from "@mantine/core";
-import { notifications } from "@mantine/notifications";
-import { IBudgetCreateRequest } from "~/models/budget";
-import { useQueryClient, useMutation, useQuery } from "@tanstack/react-query";
-import { AxiosError, AxiosResponse } from "axios";
 import { PlusIcon } from "lucide-react";
 import React from "react";
-import { useAuth } from "~/providers/AuthProvider/AuthProvider";
-import { translateAxiosError } from "~/helpers/requests";
 import { ICategoryNode } from "~/models/category";
 import UnbudgetedChildCard from "./UnbudgetedChildCard/UnbudgetedChildCard";
 import { roundAwayFromZero } from "~/helpers/utils";
-import { IUserSettings } from "~/models/userSettings";
 import { uncategorizedTransactionCategory } from "~/models/transaction";
 import Card from "~/components/core/Card/Card";
 import PrimaryText from "~/components/core/Text/PrimaryText/PrimaryText";
 import { useTranslation } from "react-i18next";
+import { useLocale } from "~/providers/LocaleProvider/LocaleProvider";
+import { useCreateBudgetMutation } from "~/hooks/mutations/budgets/useCreateBudgetMutation";
+import { useUserSettings } from "~/providers/UserSettingsProvider/UserSettingsProvider";
 
 interface UnbudgetedCardProps {
   categoryTree: ICategoryNode;
@@ -26,48 +22,15 @@ interface UnbudgetedCardProps {
 
 const UnbudgetedCard = (props: UnbudgetedCardProps): React.ReactNode => {
   const { t } = useTranslation();
-  const { request } = useAuth();
-
-  const userSettingsQuery = useQuery({
-    queryKey: ["userSettings"],
-    queryFn: async (): Promise<IUserSettings | undefined> => {
-      const res: AxiosResponse = await request({
-        url: "/api/userSettings",
-        method: "GET",
-      });
-
-      if (res.status === 200) {
-        return res.data as IUserSettings;
-      }
-
-      return undefined;
-    },
-  });
-
-  const queryClient = useQueryClient();
-  const doAddBudget = useMutation({
-    mutationFn: async (newBudget: IBudgetCreateRequest[]) =>
-      await request({
-        url: "/api/budget",
-        method: "POST",
-        data: newBudget,
-      }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["budgets"] });
-    },
-    onError: (error: AxiosError) => {
-      notifications.show({
-        message: translateAxiosError(error),
-        color: "var(--button-color-destructive)",
-      });
-    },
-  });
+  const { intlLocale, dayjs } = useLocale();
+  const { preferredCurrency } = useUserSettings();
+  const createBudgetMutation = useCreateBudgetMutation();
 
   if (
     roundAwayFromZero(
       props.categoryToTransactionsTotalMap.get(
-        props.categoryTree.value.toLocaleLowerCase()
-      ) ?? 0
+        props.categoryTree.value.toLocaleLowerCase(),
+      ) ?? 0,
     ) === 0
   ) {
     return null;
@@ -83,7 +46,7 @@ const UnbudgetedCard = (props: UnbudgetedCardProps): React.ReactNode => {
     props.categoryTree.subCategories.forEach((subCategory) => {
       if (
         !props.categoryToTransactionsTotalMap.has(
-          subCategory.value.toLocaleLowerCase()
+          subCategory.value.toLocaleLowerCase(),
         )
       ) {
         return;
@@ -94,12 +57,12 @@ const UnbudgetedCard = (props: UnbudgetedCardProps): React.ReactNode => {
           category={subCategory.value}
           amount={
             props.categoryToTransactionsTotalMap.get(
-              subCategory.value.toLocaleLowerCase()
+              subCategory.value.toLocaleLowerCase(),
             )!
           }
           selectedDate={props.selectedDate}
           openDetails={props.openDetails}
-        />
+        />,
       );
     });
 
@@ -122,7 +85,7 @@ const UnbudgetedCard = (props: UnbudgetedCardProps): React.ReactNode => {
         hoverEffect
         elevation={2}
       >
-        <LoadingOverlay visible={doAddBudget.isPending} />
+        <LoadingOverlay visible={createBudgetMutation.isPending} />
         <Group w="100%" justify="space-between">
           <PrimaryText size="md" fw={600}>
             {props.categoryTree.value.length === 0
@@ -130,32 +93,32 @@ const UnbudgetedCard = (props: UnbudgetedCardProps): React.ReactNode => {
               : props.categoryTree.value}
           </PrimaryText>
           <Group gap="sm">
-            {userSettingsQuery.isPending ? null : (
-              <PrimaryText size="1rem" fw={600}>
-                {convertNumberToCurrency(
-                  props.categoryToTransactionsTotalMap.get(
-                    props.categoryTree.value.toLocaleLowerCase()
-                  ) ?? 0,
-                  false,
-                  userSettingsQuery.data?.currency ?? "USD"
-                )}
-              </PrimaryText>
-            )}
+            <PrimaryText size="1rem" fw={600}>
+              {convertNumberToCurrency(
+                props.categoryToTransactionsTotalMap.get(
+                  props.categoryTree.value.toLocaleLowerCase(),
+                ) ?? 0,
+                false,
+                preferredCurrency,
+                SignDisplay.Auto,
+                intlLocale,
+              )}
+            </PrimaryText>
             {props.selectedDate && props.categoryTree.value.length !== 0 && (
               <ActionIcon
                 size="sm"
                 onClick={(event) => {
                   event.stopPropagation();
-                  doAddBudget.mutate([
+                  createBudgetMutation.mutate([
                     {
-                      date: props.selectedDate!,
+                      month: dayjs(props.selectedDate!).format("YYYY-MM-DD"),
                       category: props.categoryTree.value,
                       limit: Math.round(
                         Math.abs(
                           props.categoryToTransactionsTotalMap.get(
-                            props.categoryTree.value.toLocaleLowerCase()
-                          ) ?? 0
-                        )
+                            props.categoryTree.value.toLocaleLowerCase(),
+                          ) ?? 0,
+                        ),
                       ),
                     },
                   ]);

@@ -14,86 +14,47 @@ public class TransactionService(
     ILogger<ITransactionService> logger,
     UserDataContext userDataContext,
     INowProvider nowProvider,
+    IAutomaticTransactionCategorizerService automaticTransactionCategorizerService,
     IStringLocalizer<ResponseStrings> responseLocalizer,
     IStringLocalizer<LogStrings> logLocalizer
 ) : ITransactionService
 {
     /// <inheritdoc />
     public async Task CreateTransactionAsync(
-        ApplicationUser userData,
+        Guid userGuid,
         ITransactionCreateRequest request,
-        IEnumerable<ICategory>? allCategories = null,
-        AutomaticTransactionCategorizerHelper? autoCategorizer = null
+        bool deferSave = false
     )
     {
-        var account = userData.Accounts.FirstOrDefault(a => a.ID == request.AccountID);
-        if (account == null)
-        {
-            logger.LogError("{LogMessage}", logLocalizer["TransactionCreateAccountNotFoundLog"]);
-            throw new BudgetBoardServiceException(
-                responseLocalizer["TransactionCreateAccountNotFoundError"]
-            );
-        }
+        var userData = await GetCurrentUserAsync(userGuid);
+        await CreateTransactionAsync(userData, request, deferSave);
+    }
+
+    /// <inheritdoc />
+    public async Task CreateTransactionAsync(
+        ApplicationUser userData,
+        ITransactionCreateRequest request,
+        bool deferSave = false
+    )
+    {
+        var account = GetAccountByID(userData, request.AccountID);
 
         var newTransaction = new Transaction
         {
             SyncID = request.SyncID,
             Amount = request.Amount,
-            Date = request.Date.ToUniversalTime(),
+            Date = request.Date,
             Category = request.Category,
             Subcategory = request.Subcategory,
             MerchantName = request.MerchantName,
-            Source = request.Source ?? TransactionSource.Manual.Value,
+            Source = request.Source ?? TransactionSource.Manual,
             AccountID = request.AccountID,
             Account = account,
         };
-
-        if (
-            autoCategorizer is not null
-            && allCategories is not null
-            && newTransaction.MerchantName is not null
-            && newTransaction.MerchantName != string.Empty
-        )
-        {
-            var (PredictionCategory, PredictionProbability) = autoCategorizer.PredictCategory(
-                newTransaction
-            );
-
-            logger.LogInformation(
-                "{LogMessage}",
-                logLocalizer[
-                    "AutoCategorizerPredictionLog",
-                    PredictionCategory,
-                    PredictionProbability,
-                    newTransaction.MerchantName,
-                    newTransaction.Account.Name,
-                    newTransaction.Amount
-                ]
-            );
-
-            if (
-                PredictionProbability
-                >= (userData.UserSettings?.AutoCategorizerMinimumProbabilityPercentage ?? 70) / 100f
-            )
-            {
-                (newTransaction.Category, newTransaction.Subcategory) =
-                    TransactionCategoriesHelpers.GetFullCategory(PredictionCategory, allCategories);
-            }
-            else
-            {
-                logger.LogInformation(
-                    "{LogMessage}",
-                    logLocalizer[
-                        "AutoCategorizerPredictionBelowThresholdLog",
-                        PredictionCategory,
-                        PredictionProbability,
-                        userData.UserSettings?.AutoCategorizerMinimumProbabilityPercentage ?? 70,
-                        newTransaction.MerchantName,
-                        newTransaction.Amount
-                    ]
-                );
-            }
-        }
+        await automaticTransactionCategorizerService.AutoCategorizeTransactionAsync(
+            userData.Id,
+            newTransaction
+        );
 
         userDataContext.Transactions.Add(newTransaction);
 
@@ -103,18 +64,21 @@ public class TransactionService(
             UpdateBalancesForNewTransaction(account, request);
         }
 
-        await userDataContext.SaveChangesAsync();
-    }
+        if (!deferSave)
+        {
+            await userDataContext.SaveChangesAsync();
+        }
 
-    public async Task CreateTransactionAsync(
-        Guid userGuid,
-        ITransactionCreateRequest request,
-        IEnumerable<ICategory>? allCategories = null,
-        AutomaticTransactionCategorizerHelper? autoCategorizer = null
-    )
-    {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
-        await CreateTransactionAsync(userData, request, allCategories, autoCategorizer);
+        void UpdateBalancesForNewTransaction(Account account, ITransactionCreateRequest transaction)
+        {
+            CreateBalanceForDateIfNotExists(account, transaction.Date);
+
+            var affectedBalances = account.Balances.Where(b => b.Date >= transaction.Date).ToList();
+            foreach (var balance in affectedBalances)
+            {
+                balance.Amount += transaction.Amount;
+            }
+        }
     }
 
     /// <inheritdoc />
@@ -122,15 +86,26 @@ public class TransactionService(
         Guid userGuid,
         int? year,
         int? month,
-        bool getHidden,
-        Guid guid = default
+        bool includeHidden,
+        bool includeDeleted
     )
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
-        var transactions = userData
-            .Accounts.SelectMany(t => t.Transactions)
-            .Where(t => getHidden || !(t.Account?.HideTransactions ?? false));
+        var transactions = userData.Accounts.SelectMany(t => t.Transactions);
+
+        if (!includeDeleted)
+        {
+            transactions = transactions.Where(t => t.Deleted == null);
+        }
+
+        if (!includeHidden)
+        {
+            transactions = transactions.Where(t =>
+                t.Account!.HideTransactions is false
+                && t.Category != TransactionCategoriesConstants.HideFromBudgetsCategory
+            );
+        }
 
         if (year != null)
         {
@@ -141,118 +116,137 @@ public class TransactionService(
             transactions = transactions.Where(t => t.Date.Month == month);
         }
 
-        if (guid != default)
-        {
-            var transaction = transactions.FirstOrDefault(t => t.ID == guid);
-            if (transaction == null)
-            {
-                logger.LogError("{LogMessage}", logLocalizer["TransactionNotFoundLog"]);
-                throw new BudgetBoardServiceException(
-                    responseLocalizer["TransactionNotFoundError"]
-                );
-            }
-
-            return [new TransactionResponse(transaction)];
-        }
-
-        return transactions.Select(t => new TransactionResponse(t)).ToList();
+        return transactions
+            .OrderByDescending(t => t.Date)
+            .Select(t => new TransactionResponse(t))
+            .ToList();
     }
 
     /// <inheritdoc />
-    public async Task UpdateTransactionAsync(
+    public async Task UpdateTransactionsAsync(
         Guid userGuid,
-        ITransactionUpdateRequest editedTransaction
+        IEnumerable<ITransactionUpdateRequest> requests,
+        bool deferSave = false
     )
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
-
-        var transaction = userData
-            .Accounts.SelectMany(t => t.Transactions)
-            .FirstOrDefault(t => t.ID == editedTransaction.ID);
-        if (transaction == null)
+        var userData = await GetCurrentUserAsync(userGuid);
+        foreach (var request in requests)
         {
-            logger.LogError("{LogMessage}", logLocalizer["TransactionUpdateNotFoundLog"]);
-            throw new BudgetBoardServiceException(
-                responseLocalizer["TransactionUpdateNotFoundError"]
+            var transaction = GetTransactionByID(userData, request.ID);
+            var originalAmount = transaction.Amount;
+            var originalDate = transaction.Date;
+            var finalAmount = request.Amount ?? originalAmount;
+            var finalDate = request.Date ?? originalDate;
+
+            if (request.Amount.HasValue)
+            {
+                transaction.Amount = finalAmount;
+            }
+            if (request.Date.HasValue)
+            {
+                transaction.Date = finalDate;
+            }
+            if (request.Category.IsSpecified)
+            {
+                transaction.Category = request.Category.Value;
+            }
+            if (request.Subcategory.IsSpecified)
+            {
+                transaction.Subcategory = request.Subcategory.Value;
+            }
+            if (request.MerchantName.IsSpecified)
+            {
+                transaction.MerchantName = request.MerchantName.Value;
+            }
+
+            UpdateBalancesForEditedTransaction(
+                transaction,
+                originalAmount,
+                originalDate,
+                finalAmount,
+                finalDate
             );
         }
 
-        var amountDifference = editedTransaction.Amount - transaction.Amount;
-
-        transaction.Amount = editedTransaction.Amount;
-        transaction.Date = editedTransaction.Date.ToUniversalTime();
-        transaction.Category = editedTransaction.Category;
-        transaction.Subcategory = editedTransaction.Subcategory;
-        transaction.MerchantName = editedTransaction.MerchantName;
-
-        if (transaction.Account?.Source == AccountSource.Manual)
+        if (!deferSave)
         {
-            // Update all following balances to include the edited transaction.
-            var balancesAfterEdited = transaction
-                .Account.Balances.Where(b => b.DateTime >= transaction.Date)
-                .ToList();
-            foreach (var balance in balancesAfterEdited)
-            {
-                balance.Amount += amountDifference;
-            }
+            await userDataContext.SaveChangesAsync();
         }
 
-        await userDataContext.SaveChangesAsync();
+        void UpdateBalancesForEditedTransaction(
+            Transaction transaction,
+            decimal originalAmount,
+            DateOnly originalDate,
+            decimal finalAmount,
+            DateOnly finalDate
+        )
+        {
+            if (transaction.Account!.Source == AccountSource.Manual)
+            {
+                SubtractAmountFromBalances(transaction, originalAmount, originalDate);
+                CreateBalanceForDateIfNotExists(transaction.Account, finalDate);
+                AddAmountToBalances(transaction, finalAmount, finalDate);
+            }
+        }
     }
 
     /// <inheritdoc />
-    public async Task DeleteTransactionAsync(Guid userGuid, Guid guid)
+    public async Task DeleteTransactionsAsync(
+        Guid userGuid,
+        IEnumerable<Guid> transactionIds,
+        bool deferSave = false
+    )
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
-        var transaction = userData
-            .Accounts.SelectMany(t => t.Transactions)
-            .FirstOrDefault(t => t.ID == guid);
-        if (transaction == null)
+        var uniqueTransactionIds = transactionIds.Distinct().ToList();
+        foreach (var transactionId in uniqueTransactionIds)
         {
-            logger.LogError("{LogMessage}", logLocalizer["TransactionDeleteNotFoundLog"]);
-            throw new BudgetBoardServiceException(
-                responseLocalizer["TransactionDeleteNotFoundError"]
-            );
-        }
+            var transaction = GetTransactionByID(userData, transactionId);
 
-        transaction.Deleted = nowProvider.UtcNow;
+            transaction.Deleted = nowProvider.UtcNow;
+            transaction.Category = null;
+            transaction.Subcategory = null;
 
-        Account account = transaction.Account!;
-        // Manual accounts need to manually update the balance
-        if (account.Source == AccountSource.Manual)
-        {
-            // Update all following balances to not include the deleted transaction.
-            var balancesAfterDeleted = account
-                .Balances.Where(b => b.DateTime >= transaction.Date)
-                .ToList();
-            foreach (var balance in balancesAfterDeleted)
+            if (transaction.Account!.Source == AccountSource.Manual)
             {
-                balance.Amount -= transaction.Amount;
+                SubtractAmountFromBalances(transaction, transaction.Amount, transaction.Date);
             }
         }
 
-        await userDataContext.SaveChangesAsync();
+        if (!deferSave)
+        {
+            await userDataContext.SaveChangesAsync();
+        }
     }
 
     /// <inheritdoc />
-    public async Task RestoreTransactionAsync(Guid userGuid, Guid guid)
+    public async Task RestoreTransactionsAsync(
+        Guid userGuid,
+        IEnumerable<Guid> transactionIds,
+        bool deferSave = false
+    )
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
+        var userData = await GetCurrentUserAsync(userGuid);
 
-        var transaction = userData
-            .Accounts.SelectMany(t => t.Transactions)
-            .FirstOrDefault(t => t.ID == guid);
-        if (transaction == null)
+        var uniqueTransactionIds = transactionIds.Distinct().ToList();
+        foreach (var transactionId in uniqueTransactionIds)
         {
-            logger.LogError("{LogMessage}", logLocalizer["TransactionRestoreNotFoundLog"]);
-            throw new BudgetBoardServiceException(
-                responseLocalizer["TransactionRestoreNotFoundError"]
-            );
+            var transaction = GetTransactionByID(userData, transactionId);
+
+            transaction.Deleted = null;
+
+            if (transaction.Account!.Source == AccountSource.Manual)
+            {
+                CreateBalanceForDateIfNotExists(transaction.Account, transaction.Date);
+                AddAmountToBalances(transaction, transaction.Amount, transaction.Date);
+            }
         }
 
-        transaction.Deleted = null;
-        await userDataContext.SaveChangesAsync();
+        if (!deferSave)
+        {
+            await userDataContext.SaveChangesAsync();
+        }
     }
 
     /// <inheritdoc />
@@ -261,18 +255,8 @@ public class TransactionService(
         ITransactionSplitRequest transactionSplitRequest
     )
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
-
-        var transaction = userData
-            .Accounts.SelectMany(t => t.Transactions)
-            .FirstOrDefault(t => t.ID == transactionSplitRequest.ID);
-        if (transaction == null)
-        {
-            logger.LogError("{LogMessage}", logLocalizer["TransactionSplitNotFoundLog"]);
-            throw new BudgetBoardServiceException(
-                responseLocalizer["TransactionSplitNotFoundError"]
-            );
-        }
+        var userData = await GetCurrentUserAsync(userGuid);
+        var transaction = GetTransactionByID(userData, transactionSplitRequest.ID);
 
         if (Math.Abs(transaction.Amount) <= Math.Abs(transactionSplitRequest.Amount))
         {
@@ -282,152 +266,160 @@ public class TransactionService(
             );
         }
 
-        var splitTransaction = new Transaction
-        {
-            SyncID = transaction.SyncID,
-            Amount = transactionSplitRequest.Amount,
-            Date = transaction.Date.ToUniversalTime(),
-            Category = transactionSplitRequest.Category,
-            Subcategory = transactionSplitRequest.Subcategory,
-            MerchantName = transaction.MerchantName,
-            Source = transaction.Source ?? TransactionSource.Manual.Value,
-            AccountID = transaction.AccountID,
-        };
+        await UpdateTransactionsAsync(
+            userGuid,
+            new TransactionUpdateRequest[]
+            {
+                new()
+                {
+                    ID = transaction.ID,
+                    Amount = transaction.Amount - transactionSplitRequest.Amount,
+                },
+            },
+            true
+        );
 
-        transaction.Amount -= transactionSplitRequest.Amount;
+        await CreateTransactionAsync(
+            userGuid,
+            new TransactionCreateRequest
+            {
+                SyncID = transaction.SyncID,
+                Amount = transactionSplitRequest.Amount,
+                Date = transaction.Date,
+                Category = transactionSplitRequest.Category,
+                Subcategory = transactionSplitRequest.Subcategory,
+                MerchantName = transaction.MerchantName,
+                Source = transaction.Source,
+                AccountID = transaction.AccountID,
+            },
+            true
+        );
 
-        userDataContext.Transactions.Add(splitTransaction);
         await userDataContext.SaveChangesAsync();
     }
 
     /// <inheritdoc />
     public async Task ImportTransactionsAsync(Guid userGuid, ITransactionImportRequest request)
     {
-        var userData = await GetCurrentUserAsync(userGuid.ToString());
-        var transactions = request.Transactions;
-        var accountNameToIDMap = request.AccountNameToIDMap;
-
+        var userData = await GetCurrentUserAsync(userGuid);
         var allCategories = TransactionCategoriesHelpers.GetAllTransactionCategories(userData);
-        var autoCategorizer =
-            await AutomaticTransactionCategorizerHelper.CreateAutoCategorizerAsync(
-                userDataContext,
-                userData
-            );
 
-        foreach (var transaction in transactions)
+        foreach (var transaction in request.Transactions)
         {
-            var account = userData.Accounts.FirstOrDefault(a =>
-                a.ID
-                == accountNameToIDMap
-                    .FirstOrDefault(a =>
-                        a.AccountName.Equals(
-                            transaction.Account,
-                            StringComparison.InvariantCultureIgnoreCase
-                        )
+            var accountId = request
+                .AccountNameToIDMap.FirstOrDefault(a =>
+                    a.AccountName.Equals(
+                        transaction.Account,
+                        StringComparison.InvariantCultureIgnoreCase
                     )
-                    ?.AccountID
-            );
-            if (account == null)
-            {
-                logger.LogError(
-                    "{LogMessage}",
-                    logLocalizer["TransactionImportAccountNotFoundLog"]
-                );
-                throw new BudgetBoardServiceException(
-                    responseLocalizer["TransactionImportAccountNotFoundError"]
-                );
-            }
-
-            string matchedCategory =
-                allCategories
-                    .FirstOrDefault(c =>
-                        c.Value.Equals(
-                            transaction.Category,
-                            StringComparison.InvariantCultureIgnoreCase
-                        )
-                    )
-                    ?.Value ?? string.Empty;
+                )
+                ?.AccountID;
+            var account = GetAccountByID(userData, accountId ?? Guid.Empty);
 
             var newTransaction = new TransactionCreateRequest
             {
                 SyncID = string.Empty,
                 Amount = transaction.Amount ?? 0,
-                Date = transaction.Date ?? nowProvider.UtcNow,
+                Date = transaction.Date ?? nowProvider.Today,
                 MerchantName = transaction.MerchantName,
-                Source = TransactionSource.Manual.Value,
+                Source = TransactionSource.Manual,
                 AccountID = account.ID,
             };
 
+            var matchedCategory = allCategories.FirstOrDefault(c =>
+                c.Value.Equals(transaction.Category, StringComparison.InvariantCultureIgnoreCase)
+            );
+            string coercedCategoryValue = matchedCategory?.Value ?? string.Empty;
+
             (newTransaction.Category, newTransaction.Subcategory) =
-                TransactionCategoriesHelpers.GetFullCategory(matchedCategory, allCategories);
+                TransactionCategoriesHelpers.GetFullCategory(coercedCategoryValue, allCategories);
 
-            await CreateTransactionAsync(userData, newTransaction, allCategories, autoCategorizer);
+            await CreateTransactionAsync(userData, newTransaction, true);
         }
+
+        await userDataContext.SaveChangesAsync();
     }
 
-    private async Task<ApplicationUser> GetCurrentUserAsync(string id)
+    private async Task<ApplicationUser> GetCurrentUserAsync(Guid id)
     {
-        ApplicationUser? foundUser;
-        try
-        {
-            foundUser = await userDataContext
-                .ApplicationUsers.Include(u => u.Accounts)
-                .ThenInclude(a => a.Transactions)
-                .Include(u => u.Accounts)
-                .ThenInclude(a => a.Balances)
-                .Include(u => u.UserSettings)
-                .Include(u => u.TransactionCategories)
-                .AsSplitQuery()
-                .FirstOrDefaultAsync(u => u.Id == new Guid(id));
-        }
-        catch (Exception ex)
-        {
-            logger.LogError("{LogMessage}", logLocalizer["UserDataRetrievalErrorLog", ex.Message]);
-            throw new BudgetBoardServiceException(responseLocalizer["UserDataRetrievalError"]);
-        }
-
-        if (foundUser == null)
-        {
-            logger.LogError("{LogMessage}", logLocalizer["InvalidUserErrorLog"]);
-            throw new BudgetBoardServiceException(responseLocalizer["InvalidUserError"]);
-        }
-
-        return foundUser;
+        return await UserDataServiceHelper.GetCurrentUserAsync(
+            userDataContext,
+            logger,
+            logLocalizer,
+            responseLocalizer,
+            id,
+            users =>
+                users
+                    .Include(u => u.Accounts)
+                    .ThenInclude(a => a.Transactions)
+                    .Include(u => u.Accounts)
+                    .ThenInclude(a => a.Balances)
+                    .Include(u => u.UserSettings)
+                    .Include(u => u.TransactionCategories)
+        );
     }
 
-    private void UpdateBalancesForNewTransaction(
-        Account account,
-        ITransactionCreateRequest transaction
+    private Transaction GetTransactionByID(ApplicationUser userData, Guid transactionID)
+    {
+        var transaction = userData
+            .Accounts.SelectMany(a => a.Transactions)
+            .FirstOrDefault(t => t.ID == transactionID);
+        if (transaction == null)
+        {
+            logger.LogError("{LogMessage}", logLocalizer["TransactionNotFoundLog"]);
+            throw new BudgetBoardServiceException(responseLocalizer["TransactionNotFoundError"]);
+        }
+        return transaction;
+    }
+
+    private Account GetAccountByID(ApplicationUser userData, Guid accountID)
+    {
+        var account = userData.Accounts.FirstOrDefault(a => a.ID == accountID);
+        if (account == null)
+        {
+            logger.LogError("{LogMessage}", logLocalizer["TransactionAccountNotFoundLog"]);
+            throw new BudgetBoardServiceException(
+                responseLocalizer["TransactionAccountNotFoundError"]
+            );
+        }
+
+        return account;
+    }
+
+    private static void SubtractAmountFromBalances(
+        Transaction transaction,
+        decimal amount,
+        DateOnly date
     )
     {
-        var currentBalance = account
-            .Balances.Where(b => b.DateTime.Date <= transaction.Date.ToUniversalTime().Date)
-            .OrderByDescending(b => b.DateTime)
-            .FirstOrDefault();
+        var balancesAfterDate = transaction.Account!.Balances.Where(b => b.Date >= date);
+        balancesAfterDate.ToList().ForEach(balance => balance.Amount -= amount);
+    }
 
-        // First, add the new balance for the new transaction if no balance exists for that date.
-        if (
-            currentBalance == null
-            || currentBalance.DateTime.Date != transaction.Date.ToUniversalTime().Date
-        )
+    private static void AddAmountToBalances(Transaction transaction, decimal amount, DateOnly date)
+    {
+        var balancesAfterDate = transaction.Account!.Balances.Where(b => b.Date >= date);
+        balancesAfterDate.ToList().ForEach(balance => balance.Amount += amount);
+    }
+
+    private void CreateBalanceForDateIfNotExists(Account account, DateOnly date)
+    {
+        var existingBalance = account.Balances.FirstOrDefault(b => b.Date == date);
+        if (existingBalance == null)
         {
+            var precedingBalance = account
+                .Balances.Where(b => b.Date < date)
+                .OrderByDescending(b => b.Date)
+                .FirstOrDefault();
+
             var newBalance = new Balance
             {
-                Amount = currentBalance?.Amount ?? 0,
-                DateTime = transaction.Date.ToUniversalTime().Date,
+                Amount = precedingBalance?.Amount ?? 0,
+                Date = date,
                 AccountID = account.ID,
             };
 
             userDataContext.Balances.Add(newBalance);
-        }
-
-        // Then, update all following balances to include the new transaction.
-        var balancesAfterNew = account
-            .Balances.Where(b => b.DateTime.Date >= transaction.Date.ToUniversalTime().Date)
-            .ToList();
-        foreach (var balance in balancesAfterNew)
-        {
-            balance.Amount += transaction.Amount;
         }
     }
 }

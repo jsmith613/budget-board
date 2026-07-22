@@ -1,9 +1,76 @@
 using BudgetBoard.Service.Models;
+using BudgetBoard.Service.Models.Widgets.NetWorthWidget;
 
 namespace BudgetBoard.Service.Helpers;
 
+public record DefaultWidgetLayout(
+    string WidgetType,
+    int LgX,
+    int LgY,
+    int LgW,
+    int LgH,
+    int SmY,
+    int SmH
+);
+
 public static class WidgetSettingsHelpers
 {
+    /// <summary>
+    /// Default grid positions for each widget on a 12-column grid.
+    /// Matches the original two-column dashboard layout.
+    /// </summary>
+    public static readonly IReadOnlyList<DefaultWidgetLayout> DefaultLayouts =
+    [
+        new DefaultWidgetLayout(
+            WidgetTypes.Accounts,
+            LgX: 0,
+            LgY: 0,
+            LgW: 4,
+            LgH: 11,
+            SmY: 0,
+            SmH: 20
+        ),
+        new DefaultWidgetLayout(
+            WidgetTypes.UncategorizedTransactions,
+            LgX: 4,
+            LgY: 6,
+            LgW: 8,
+            LgH: 11,
+            SmY: 36,
+            SmH: 11
+        ),
+        new DefaultWidgetLayout(
+            WidgetTypes.NetWorth,
+            LgX: 0,
+            LgY: 11,
+            LgW: 4,
+            LgH: 10,
+            SmY: 20,
+            SmH: 10
+        ),
+        new DefaultWidgetLayout(
+            WidgetTypes.SpendingTrends,
+            LgX: 4,
+            LgY: 17,
+            LgW: 8,
+            LgH: 16,
+            SmY: 47,
+            SmH: 16
+        ),
+        new DefaultWidgetLayout(
+            WidgetTypes.Metric,
+            LgX: 4,
+            LgY: 0,
+            LgW: 2,
+            LgH: 6,
+            SmY: 30,
+            SmH: 6
+        ),
+    ];
+
+    /// <summary>
+    /// Default configuration for the NetWorth widget.
+    /// </summary>
     public static readonly NetWorthWidgetConfiguration DefaultNetWorthWidgetConfiguration = new()
     {
         Groups =
@@ -185,4 +252,8 @@ public static class WidgetSettingsHelpers
             },
         ],
     };
+
+    public static DefaultWidgetLayout GetDefaultWidgetLayout(string widgetType) =>
+        DefaultLayouts.FirstOrDefault(dl => dl.WidgetType == widgetType)
+        ?? new DefaultWidgetLayout(widgetType, 0, 0, 4, 5, 0, 5);
 }
